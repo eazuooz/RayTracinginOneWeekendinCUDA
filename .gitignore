@@ -1,6 +1,36 @@
-*.i
-*.ii
-*.gpu
+# 1. Visual Studio 임시 파일 및 캐시 (가장 용량이 큼)
+.vs/
+*.user
+*.suo
+*.ipch
+*.db
+*.opensdf
+*.sdf
+
+# 2. 빌드 결과물 (Debug, Release 폴더 등)
+x64/
+x86/
+Debug/
+Release/
+build/
+out/
+
+# 3. 컴파일된 바이너리 및 중간 파일
+*.exe
+*.dll
+*.lib
+*.obj
+*.pdb
+*.ilk
+*.exp
+*.gch
+*.pch
+
+# 4. CUDA 관련 중간 파일
 *.ptx
 *.cubin
 *.fatbin
+
+# 5. 기타 시스템 파일
+.DS_Store
+Thumbs.db
