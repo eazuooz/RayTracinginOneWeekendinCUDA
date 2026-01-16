@@ -3,8 +3,9 @@
 #include "device_launch_parameters.h"
 
 #include <iostream>
-#include <print>
 
+#include "Vec3.h"
+#include "Color.h"
 
 cudaError_t addWithCuda(int* c, const int* a, const int* b, unsigned int size);
 
@@ -53,20 +54,16 @@ int main()
 	
 	for (int j = 0; j < imageHeight; j++)
 	{
+		std::clog << "\rScanlines remaining: " << (imageHeight - j) << ' ' << std::flush;
 		for (int i = 0; i < imageWidth; i++)
 		{
-			auto r = double(i) / (imageWidth - 1);
-			auto g = double(j) / (imageHeight - 1);
-			auto b = 0.0;
-
-			int ir = int(255.999 * r);
-			int ig = int(255.999 * g);
-			int ib = int(255.999 * b);
-
-			std::cout << ir << ' ' << ig << ' ' << ib << '\n';
+			auto PixelColor = Color(double(i) / (imageWidth - 1), double(j) / (imageHeight - 1), 0);
+			WriteColor(std::cout, PixelColor);
 		}
 	}
-		
+
+	std::clog << "\rDone.                 \n";
+
 	return 0;
 }
 
