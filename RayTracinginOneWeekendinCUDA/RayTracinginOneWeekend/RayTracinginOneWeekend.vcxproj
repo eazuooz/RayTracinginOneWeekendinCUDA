@@ -86,6 +86,7 @@
     <ClInclude Include="Color.h" />
     <ClInclude Include="Hittable.h" />
     <ClInclude Include="HittableList.h" />
+    <ClInclude Include="Interval.h" />
     <ClInclude Include="Ray.h" />
     <ClInclude Include="RtWeekend.h" />
     <ClInclude Include="Sphere.h" />

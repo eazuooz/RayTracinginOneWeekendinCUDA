@@ -16,8 +16,7 @@ public:
 
     bool Hit(
         const Ray& ray,
-        double rayTMin,
-        double rayTMax,
+        const Interval& rayT,
         HitRecord& hitRecord
     ) const override
     {
@@ -35,12 +34,12 @@ public:
 
         auto squareRootDiscriminant = std::sqrt(discriminant);
 
-        // Find the nearest root that lies in the acceptable range
+        // 허용 가능한 범위 내에 있는 가장 가까운 근을 찾습니다
         auto root = (h - squareRootDiscriminant) / a;
-        if (root <= rayTMin || rayTMax <= root)
+        if (!rayT.Surrounds(root))
         {
             root = (h + squareRootDiscriminant) / a;
-            if (root <= rayTMin || rayTMax <= root)
+            if (!rayT.Surrounds(root))
             {
                 return false;
             }
