@@ -103,7 +103,8 @@ private:
 
         if (world.Hit(ray, Interval(0.0, Infinity), hitRecord))
         {
-            return 0.5 * (hitRecord.Normal + Color(1.0, 1.0, 1.0));
+            Vec3 direction = RandomOnHemisphere(hitRecord.Normal);
+            return 0.5 * RayColor(Ray(hitRecord.P, direction), world);
         }
 
         Vec3 unitDirection = UnitVector(ray.Direction());
