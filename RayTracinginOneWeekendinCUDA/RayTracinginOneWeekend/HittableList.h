@@ -29,11 +29,7 @@ public:
         mObjects.push_back(object);
     }
 
-    bool Hit(
-        const Ray& ray,
-        const Interval& rayT,
-        HitRecord& hitRecord
-    ) const override
+    bool Hit(const Ray& ray, const Interval& rayT, HitRecord& hitRecord) const override
     {
         HitRecord temporaryHitRecord;
         bool bHitAnything = false;

@@ -4,9 +4,9 @@
 
 #include "RtWeekend.h"
 
-class HitRecord
+class Material;
+struct HitRecord
 {
-public:
     void SetFaceNormal(const Ray& r, const Vec3& outwardNormal)
     {
         // 히트 레코드 법선 벡터를 설정합니다.
@@ -20,6 +20,7 @@ public:
     Vec3 Normal;
     double T;
     bool bFrontFace;
+    std::shared_ptr<Material> Material;
 };
 
 class Hittable

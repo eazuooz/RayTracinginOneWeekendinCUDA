@@ -50,6 +50,16 @@ struct Vector3
         return E[0] * E[0] + E[1] * E[1] + E[2] * E[2];
     }
 
+    bool NearZero() const
+    {
+        // Return true if the vector is close to zero in all dimensions
+        auto threshold = 1e-8;
+
+        return (std::fabs(E[0]) < threshold)
+            && (std::fabs(E[1]) < threshold)
+            && (std::fabs(E[2]) < threshold);
+    }
+
     static Vector3 Random()
     {
         return Vector3(RandomDouble(), RandomDouble(), RandomDouble());
@@ -152,6 +162,11 @@ inline Vector3 RandomOnHemisphere(const Vector3& normal)
     }
 
     return -unitSphereDirection;
+}
+
+inline Vec3 Reflect(const Vec3& v, const Vec3& n)
+{
+    return v - 2.0 * Dot(v, n) * n;
 }
 
 #endif
