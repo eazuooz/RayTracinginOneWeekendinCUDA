@@ -2,11 +2,11 @@
 #include "cuda_runtime.h"
 #include "device_launch_parameters.h"
 
-#include <iostream>
+#include "RtWeekend.h"
 
-#include "Vec3.h"
-#include "Color.h"
-#include "Ray.h"
+#include "Hittable.h"
+#include "HittableList.h"
+#include "Sphere.h"
 
 cudaError_t addWithCuda(int* c, const int* a, const int* b, unsigned int size);
 __global__ void addKernel(int* c, const int* a, const int* b)
@@ -15,34 +15,12 @@ __global__ void addKernel(int* c, const int* a, const int* b)
 	c[i] = a[i] + b[i];
 }
 
-double HitSphere(const Point3& center, double radius, const Ray& ray)
+Color RayColor(const Ray& ray, const Hittable& world)
 {
-	Vec3 oc = center - ray.Origin();
-	auto a = ray.Direction().LengthSquared();
-	auto h = Dot(ray.Direction(), oc);
-	auto c = oc.LengthSquared() - radius * radius;
-	auto discriminant = h * h - a * c;
-
-	if (discriminant < 0)
+	HitRecord hitRecord;
+	if (world.Hit(ray, 0.0, Infinity, hitRecord))
 	{
-		return -1.0;
-	}
-
-	return (h - std::sqrt(discriminant)) / a;
-}
-
-Color RayColor(const Ray& ray)
-{
-	auto t = HitSphere(Point3(0.0, 0.0, -1.0), 0.5, ray);
-	if (t > 0.0)
-	{
-		Vec3 surfaceNormal = UnitVector(ray.At(t) - Vec3(0.0, 0.0, -1.0));
-		return 0.5 * Color
-		(
-			surfaceNormal.X() + 1.0,
-			surfaceNormal.Y() + 1.0,
-			surfaceNormal.Z() + 1.0
-		);
+		return 0.5 * (hitRecord.Normal + Color(1.0, 1.0, 1.0));
 	}
 
 	Vector3 unitDirection = UnitVector(ray.Direction());
@@ -89,6 +67,12 @@ int main()
 	int imageHeight = int(imageWidth / aspectRatio);
 	imageHeight = (imageHeight < 1) ? 1 : imageHeight;
 
+	// World
+
+	HittableList world;
+	world.Add(std::make_shared<Sphere>(Point3(0.0, 0.0, -1.0), 0.5));
+	world.Add(std::make_shared<Sphere>(Point3(0.0, -100.5, -1.0), 100.0));
+
 	// Camera
 	auto focalLength = 1.0;
 	auto viewportHeight = 2.0;
@@ -119,7 +103,7 @@ int main()
 			auto rayDirection = pixelCenter - cameraCenter;
 			Ray r(cameraCenter, rayDirection);
 
-			Color pixelColor = RayColor(r);
+			Color pixelColor = RayColor(r, world);
 			WriteColor(std::cout, pixelColor);
 		}
 	}
