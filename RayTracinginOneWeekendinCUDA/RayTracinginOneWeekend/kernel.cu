@@ -17,18 +17,18 @@ __global__ void addKernel(int* c, const int* a, const int* b)
 
 double HitSphere(const Point3& center, double radius, const Ray& ray)
 {
-	Vector3 oc = center - ray.Origin();
-	auto a = Dot(ray.Direction(), ray.Direction());
-	auto b = -2.0 * Dot(ray.Direction(), oc);
-	auto c = Dot(oc, oc) - radius * radius;
-	auto discriminant = b * b - 4 * a * c;
+	Vec3 oc = center - ray.Origin();
+	auto a = ray.Direction().LengthSquared();
+	auto h = Dot(ray.Direction(), oc);
+	auto c = oc.LengthSquared() - radius * radius;
+	auto discriminant = h * h - a * c;
 
-	if (discriminant < 0.0)
+	if (discriminant < 0)
 	{
 		return -1.0;
 	}
 
-	return (-b - std::sqrt(discriminant)) / (2.0 * a);
+	return (h - std::sqrt(discriminant)) / a;
 }
 
 Color RayColor(const Ray& ray)
