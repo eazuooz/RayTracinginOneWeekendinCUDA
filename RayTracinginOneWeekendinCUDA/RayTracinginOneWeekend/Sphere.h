@@ -48,7 +48,10 @@ public:
 
         hitRecord.T = root;
         hitRecord.P = ray.At(hitRecord.T);
-        hitRecord.Normal = (hitRecord.P - mCenter) / mRadius;
+
+
+        Vec3 outwardNormal = (hitRecord.P - mCenter) / mRadius;
+        hitRecord.SetFaceNormal(ray, outwardNormal);
 
         return true;
     }
@@ -59,4 +62,3 @@ private:
 };
 
 #endif
-s
