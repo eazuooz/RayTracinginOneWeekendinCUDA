@@ -15,23 +15,37 @@ __global__ void addKernel(int* c, const int* a, const int* b)
 	c[i] = a[i] + b[i];
 }
 
-bool HitSphere(const Point3& center, double radius, const Ray& r)
+double HitSphere(const Point3& center, double radius, const Ray& ray)
 {
-	Vector3 oc = center - r.Origin();
-	auto a = Dot(r.Direction(), r.Direction());
-	auto b = -2.0 * Dot(r.Direction(), oc);
+	Vector3 oc = center - ray.Origin();
+	auto a = Dot(ray.Direction(), ray.Direction());
+	auto b = -2.0 * Dot(ray.Direction(), oc);
 	auto c = Dot(oc, oc) - radius * radius;
 	auto discriminant = b * b - 4 * a * c;
 
-	return (discriminant >= 0);
+	if (discriminant < 0.0)
+	{
+		return -1.0;
+	}
+
+	return (-b - std::sqrt(discriminant)) / (2.0 * a);
 }
 
-Color RayColor(const Ray& r)
+Color RayColor(const Ray& ray)
 {
-    if (HitSphere(Point3(0,0,-1), 0.5, r))
-        return Color(1, 0, 0);
+	auto t = HitSphere(Point3(0.0, 0.0, -1.0), 0.5, ray);
+	if (t > 0.0)
+	{
+		Vec3 surfaceNormal = UnitVector(ray.At(t) - Vec3(0.0, 0.0, -1.0));
+		return 0.5 * Color
+		(
+			surfaceNormal.X() + 1.0,
+			surfaceNormal.Y() + 1.0,
+			surfaceNormal.Z() + 1.0
+		);
+	}
 
-	Vector3 unitDirection = UnitVector(r.Direction());
+	Vector3 unitDirection = UnitVector(ray.Direction());
 	auto a = 0.5 * (unitDirection.Y() + 1.0);
 
 	return (1.0 - a) * Color(1.0, 1.0, 1.0) + a * Color	(0.5, 0.7, 1.0);

@@ -5,7 +5,7 @@
 
 #include <iostream>
 
-using Color = Vec3;
+using Color = Vector3;
 
 void WriteColor(std::ostream& out, const Color& pixelColor)
 {
