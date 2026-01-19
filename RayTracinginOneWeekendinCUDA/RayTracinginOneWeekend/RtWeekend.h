@@ -20,11 +20,6 @@ inline double DegreesToRadians(double degrees)
     return degrees * Pi / 180.0;
 }
 
-inline double DegreesToRadians(double degrees)
-{
-    return degrees * Pi / 180.0;
-}
-
 inline double RandomDouble()
 {
     static std::uniform_real_distribution<double> distribution(0.0, 1.0);
@@ -37,7 +32,6 @@ inline double RandomDouble(double minimum, double maximum)
     // Returns a random real in [minimum, maximum)
     return minimum + (maximum - minimum) * RandomDouble();
 }
-
 
 // Common Headers
 #include "Color.h"

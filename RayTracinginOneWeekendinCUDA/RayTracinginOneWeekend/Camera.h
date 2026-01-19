@@ -9,6 +9,7 @@ class Camera
 public:
     double aspectRatio = 1.0;   // Ratio of image width over height
     int imageWidth = 100;       // Rendered image width in pixel count
+    int samplesPerPixel = 10;        // Count of random samples for each pixel
 
     void Render(const Hittable& world)
     {
@@ -26,16 +27,15 @@ public:
 
             for (int pixelIndex = 0; pixelIndex < imageWidth; pixelIndex++)
             {
-                auto pixelCenter =
-                    mPixel00Location
-                    + (pixelIndex * mPixelDeltaU)
-                    + (scanlineIndex * mPixelDeltaV);
+                Color pixelColor(0.0, 0.0, 0.0);
 
-                auto rayDirection = pixelCenter - mCenter;
-                Ray ray(mCenter, rayDirection);
+                for (int sampleIndex = 0; sampleIndex < samplesPerPixel; sampleIndex++)
+                {
+                    Ray ray = GetRay(pixelIndex, scanlineIndex);
+                    pixelColor += RayColor(ray, world);
+                }
 
-                Color pixelColor = RayColor(ray, world);
-                WriteColor(std::cout, pixelColor);
+                WriteColor(std::cout, mPixelSamplesScale * pixelColor);
             }
         }
 
@@ -47,7 +47,7 @@ private:
     {
         mImageHeight = static_cast<int>(imageWidth / aspectRatio);
         mImageHeight = (mImageHeight < 1) ? 1 : mImageHeight;
-
+        mPixelSamplesScale = 1.0 / static_cast<double>(samplesPerPixel);
         mCenter = Point3(0.0, 0.0, 0.0);
 
         // Determine viewport dimensions
@@ -73,6 +73,30 @@ private:
         mPixel00Location = viewportUpperLeft + 0.5 * (mPixelDeltaU + mPixelDeltaV);
     }
 
+    Ray GetRay(int pixelIndex, int scanlineIndex) const
+    {
+        // Construct a camera ray originating from the origin and directed at randomly sampled
+        // point around the pixel location pixelIndex, scanlineIndex.
+
+        auto offset = SampleSquare();
+
+        auto pixelSample =
+            mPixel00Location
+            + ((pixelIndex + offset.X()) * mPixelDeltaU)
+            + ((scanlineIndex + offset.Y()) * mPixelDeltaV);
+
+        auto rayOrigin = mCenter;
+        auto rayDirection = pixelSample - rayOrigin;
+
+        return Ray(rayOrigin, rayDirection);
+    }
+
+    Vec3 SampleSquare() const
+    {
+        // Returns the vector to a random point in the [-.5, -.5] - [+.5, +.5] unit square
+        return Vec3(RandomDouble() - 0.5, RandomDouble() - 0.5, 0.0);
+    }
+
     Color RayColor(const Ray& ray, const Hittable& world) const
     {
         HitRecord hitRecord;
@@ -95,5 +119,8 @@ private:
     Point3 mPixel00Location;      // Location of pixel 0, 0
     Vec3 mPixelDeltaU;           // Offset to pixel to the right
     Vec3 mPixelDeltaV;           // Offset to pixel below
+
+    double mPixelSamplesScale = 1.0; // Color scale factor for a sum of pixel samples
 };
+
 #endif
