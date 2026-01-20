@@ -14,10 +14,10 @@
 ### 📘 Phase 1: In One Weekend (CPU Prototype)
 > 레이 트레이싱의 기초 이론 및 CPU 기반 프로토타입 구현
 - [x] 광선(Ray) 생성 및 카메라 설정
-- [ ] 구(Sphere) 렌더링 및 히트 레코드(Hit Record)
-- [ ] 안티에일리어싱(Antialiasing) & 확산(Diffuse) 재질
-- [ ] 금속(Metal) 및 유전체(Dielectric) 재질 구현
-- [ ] 위치 조정 가능한 카메라 및 Defocus Blur
+- [x] 구(Sphere) 렌더링 및 히트 레코드(Hit Record)
+- [x] 안티에일리어싱(Antialiasing) & 확산(Diffuse) 재질
+- [x] 금속(Metal) 및 유전체(Dielectric) 재질 구현
+- [x] 위치 조정 가능한 카메라 및 Defocus Blur
 
 ### 🚀 Phase 2: CUDA Porting & Core Optimization
 > CPU 코드를 CUDA 커널로 변환하고 GPU 아키텍처에 맞게 최적화
