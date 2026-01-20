@@ -12,6 +12,7 @@ public:
     int imageWidth = 100;       // Rendered image width in pixel count
     int samplesPerPixel = 10;        // Count of random samples for each pixel
     int maxDepth = 10;               // Maximum number of ray bounces into scene
+    double vfov = 90;              // 수직 시야각(시야)
 
     void Render(const Hittable& world)
     {
@@ -54,7 +55,9 @@ private:
 
         // Determine viewport dimensions
         auto focalLength = 1.0;
-        auto viewportHeight = 2.0;
+        auto theta = DegreesToRadians(vfov);
+        auto h = std::tan(theta / 2);
+        auto viewportHeight = 2 * h * focalLength;
         auto viewportWidth = viewportHeight * (static_cast<double>(imageWidth) / mImageHeight);
 
         // Calculate the vectors across the horizontal and down the vertical viewport edges
