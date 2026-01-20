@@ -138,6 +138,17 @@ inline Vector3 UnitVector(const Vector3& v)
     return v / v.Length();
 }
 
+inline Vec3 RandomInUnitDisk()
+{
+    while (true)
+    {
+        Vec3 point(RandomDouble(-1.0, 1.0), RandomDouble(-1.0, 1.0), 0.0);
+        
+        if (point.LengthSquared() < 1.0)
+            return point;
+    }
+}
+
 inline Vector3 RandomUnitVector()
 {
     while (true)

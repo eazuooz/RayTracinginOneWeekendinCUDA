@@ -17,6 +17,10 @@ public:
     Point3 lookat = Point3(0, 0, -1);       // 카메라가 바라보는 점
     Vec3 vup = Vec3(0, 1, 0);               // 카메라 상대 "위쪽" 방향
 
+
+    double defocusAngle = 0;  // Variation angle of rays through each pixel
+    double focusDistance = 10;    // Distance from camera lookfrom point to plane of perfect focus
+
     void Render(const Hittable& world)
     {
         Initialize();
@@ -61,7 +65,7 @@ private:
         auto focalLength = (lookfrom - lookat).Length();
         auto theta = DegreesToRadians(vfov);
         auto h = std::tan(theta / 2);
-        auto viewportHeight = 2 * h * focalLength;
+        auto viewportHeight = 2.0 * h * focusDistance;
         auto viewportWidth = viewportHeight * (static_cast<double>(imageWidth) / mImageHeight);
 
         // 카메라 좌표 프레임에 대한 u,v,w 단위 기저 벡터 계산
@@ -74,18 +78,25 @@ private:
         Vec3 viewportV = viewportHeight * -v;  // 뷰포트 수직 가장자리를 따라 내려가는 벡터
 
 
+
         // Calculate the horizontal and vertical delta vectors from pixel to pixel
         mPixelDeltaU = viewportU / imageWidth;
         mPixelDeltaV = viewportV / mImageHeight;
 
         // Calculate the location of the upper left pixel
-        auto viewportUpperLeft = 
-            mCenter 
-            - (focalLength * w) 
-            - viewportU / 2.0 
+        const Point3 viewportUpperLeft =
+            mCenter
+            - (focusDistance * w)
+            - viewportU / 2.0
             - viewportV / 2.0;
 
         mPixel00Location = viewportUpperLeft + 0.5 * (mPixelDeltaU + mPixelDeltaV);
+
+        const double defocusRadius =
+            focusDistance * std::tan(DegreesToRadians(defocusAngle * 0.5));
+
+        mDefocusDiskU = u * defocusRadius;
+        mDefocusDiskV = v * defocusRadius;
     }
 
     Ray GetRay(int pixelIndex, int scanlineIndex) const
@@ -100,7 +111,7 @@ private:
             + ((pixelIndex + offset.X()) * mPixelDeltaU)
             + ((scanlineIndex + offset.Y()) * mPixelDeltaV);
 
-        auto rayOrigin = mCenter;
+        auto rayOrigin = (defocusAngle <= 0.0) ? mCenter : DefocusDiskSample();
         auto rayDirection = pixelSample - rayOrigin;
 
         return Ray(rayOrigin, rayDirection);
@@ -110,6 +121,14 @@ private:
     {
         // Returns the vector to a random point in the [-.5, -.5] - [+.5, +.5] unit square
         return Vec3(RandomDouble() - 0.5, RandomDouble() - 0.5, 0.0);
+
+    }
+
+    Point3 DefocusDiskSample() const
+    {
+        // Returns a random point in the camera defocus disk.
+        const Vec3 point = RandomInUnitDisk();
+        return mCenter + (point.X() * mDefocusDiskU) + (point.Y() * mDefocusDiskV);
     }
 
     Color RayColor(const Ray& ray, int depth, const Hittable& world) const
@@ -150,6 +169,9 @@ private:
     Vec3 u, v, w;                  // 카메라 프레임 기저 벡터
 
     double mPixelSamplesScale = 1.0; // Color scale factor for a sum of pixel samples
+
+    Vec3 mDefocusDiskU; // Defocus disk horizontal radius
+    Vec3 mDefocusDiskV; // Defocus disk vertical radius
 };
 
 #endif
