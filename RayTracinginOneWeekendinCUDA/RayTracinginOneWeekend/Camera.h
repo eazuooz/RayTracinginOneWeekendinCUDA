@@ -8,11 +8,14 @@
 class Camera
 {
 public:
-    double aspectRatio = 1.0;   // Ratio of image width over height
-    int imageWidth = 100;       // Rendered image width in pixel count
-    int samplesPerPixel = 10;        // Count of random samples for each pixel
-    int maxDepth = 10;               // Maximum number of ray bounces into scene
-    double vfov = 90;              // 수직 시야각(시야)
+    double aspectRatio = 1.0;               // Ratio of image width over height
+    int imageWidth = 100;                   // Rendered image width in pixel count
+    int samplesPerPixel = 10;               // Count of random samples for each pixel
+    int maxDepth = 10;                      // Maximum number of ray bounces into scene
+    double vfov = 90;                       // 수직 시야각(시야)
+    Point3 lookfrom = Point3(0, 0, 0);      // 카메라가 바라보는 위치
+    Point3 lookat = Point3(0, 0, -1);       // 카메라가 바라보는 점
+    Vec3 vup = Vec3(0, 1, 0);               // 카메라 상대 "위쪽" 방향
 
     void Render(const Hittable& world)
     {
@@ -51,28 +54,35 @@ private:
         mImageHeight = static_cast<int>(imageWidth / aspectRatio);
         mImageHeight = (mImageHeight < 1) ? 1 : mImageHeight;
         mPixelSamplesScale = 1.0 / static_cast<double>(samplesPerPixel);
-        mCenter = Point3(0.0, 0.0, 0.0);
+
+        mCenter = lookfrom;
 
         // Determine viewport dimensions
-        auto focalLength = 1.0;
+        auto focalLength = (lookfrom - lookat).Length();
         auto theta = DegreesToRadians(vfov);
         auto h = std::tan(theta / 2);
         auto viewportHeight = 2 * h * focalLength;
         auto viewportWidth = viewportHeight * (static_cast<double>(imageWidth) / mImageHeight);
 
-        // Calculate the vectors across the horizontal and down the vertical viewport edges
-        auto viewportU = Vec3(viewportWidth, 0.0, 0.0);
-        auto viewportV = Vec3(0.0, -viewportHeight, 0.0);
+        // 카메라 좌표 프레임에 대한 u,v,w 단위 기저 벡터 계산
+        w = UnitVector(lookfrom - lookat);
+        u = UnitVector(Cross(vup, w));
+        v = Cross(w, u);
+
+        // 뷰포트의 수평 및 수직 가장자리를 가로지르는 벡터 계산
+        Vec3 viewportU = viewportWidth * u;    // 뷰포트 수평 가장자리를 가로지르는 벡터
+        Vec3 viewportV = viewportHeight * -v;  // 뷰포트 수직 가장자리를 따라 내려가는 벡터
+
 
         // Calculate the horizontal and vertical delta vectors from pixel to pixel
         mPixelDeltaU = viewportU / imageWidth;
         mPixelDeltaV = viewportV / mImageHeight;
 
         // Calculate the location of the upper left pixel
-        auto viewportUpperLeft =
-            mCenter
-            - Vec3(0.0, 0.0, focalLength)
-            - viewportU / 2.0
+        auto viewportUpperLeft = 
+            mCenter 
+            - (focalLength * w) 
+            - viewportU / 2.0 
             - viewportV / 2.0;
 
         mPixel00Location = viewportUpperLeft + 0.5 * (mPixelDeltaU + mPixelDeltaV);
@@ -137,6 +147,7 @@ private:
     Point3 mPixel00Location;      // Location of pixel 0, 0
     Vec3 mPixelDeltaU;           // Offset to pixel to the right
     Vec3 mPixelDeltaV;           // Offset to pixel below
+    Vec3 u, v, w;                  // 카메라 프레임 기저 벡터
 
     double mPixelSamplesScale = 1.0; // Color scale factor for a sum of pixel samples
 };

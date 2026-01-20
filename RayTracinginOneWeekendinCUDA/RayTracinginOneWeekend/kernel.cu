@@ -66,23 +66,23 @@ int main()
 
 	auto R = std::cos(Pi / 4);
 
-	auto materialLeft = std::make_shared<Lambertian>(Color(0, 0, 1));
-	auto materialRight = std::make_shared<Lambertian>(Color(1, 0, 0));
+	//auto materialLeft = std::make_shared<Lambertian>(Color(0, 0, 1));
+	//auto materialRight = std::make_shared<Lambertian>(Color(1, 0, 0));
 
-	world.Add(std::make_shared<Sphere>(Point3(-R, 0, -1), R, materialLeft));
-	world.Add(std::make_shared<Sphere>(Point3(R, 0, -1), R, materialRight));
+	//world.Add(std::make_shared<Sphere>(Point3(-R, 0, -1), R, materialLeft));
+	//world.Add(std::make_shared<Sphere>(Point3(R, 0, -1), R, materialRight));
 
-	//auto materialGround = std::make_shared<Lambertian>(Color(0.8, 0.8, 0.0));
-	//auto materialCenter = std::make_shared<Lambertian>(Color(0.1, 0.2, 0.5));
-	//auto materialLeft = std::make_shared<Dielectric>(1.50);
-	//auto materialBubble = std::make_shared<Dielectric>(1.0 / 1.50);
-	//auto materialRight = std::make_shared<Metal>(Color(0.8, 0.6, 0.2), 1.0);
+	auto materialGround = std::make_shared<Lambertian>(Color(0.8, 0.8, 0.0));
+	auto materialCenter = std::make_shared<Lambertian>(Color(0.1, 0.2, 0.5));
+	auto materialLeft = std::make_shared<Dielectric>(1.50);
+	auto materialBubble = std::make_shared<Dielectric>(1.0 / 1.50);
+	auto materialRight = std::make_shared<Metal>(Color(0.8, 0.6, 0.2), 1.0);
 
-	//world.Add(std::make_shared<Sphere>(Point3(0.0, -100.5, -1.0), 100.0, materialGround));
-	//world.Add(std::make_shared<Sphere>(Point3(0.0, 0.0, -1.2), 0.5, materialCenter));
-	//world.Add(std::make_shared<Sphere>(Point3(-1.0, 0.0, -1.0), 0.5, materialLeft));
-	//world.Add(std::make_shared<Sphere>(Point3(-1.0, 0.0, -1.0), 0.4, materialBubble));
-	//world.Add(std::make_shared<Sphere>(Point3(1.0, 0.0, -1.0), 0.5, materialRight));
+	world.Add(std::make_shared<Sphere>(Point3(0.0, -100.5, -1.0), 100.0, materialGround));
+	world.Add(std::make_shared<Sphere>(Point3(0.0, 0.0, -1.2), 0.5, materialCenter));
+	world.Add(std::make_shared<Sphere>(Point3(-1.0, 0.0, -1.0), 0.5, materialLeft));
+	world.Add(std::make_shared<Sphere>(Point3(-1.0, 0.0, -1.0), 0.4, materialBubble));
+	world.Add(std::make_shared<Sphere>(Point3(1.0, 0.0, -1.0), 0.5, materialRight));
 
 	Camera camera;
 
@@ -90,7 +90,10 @@ int main()
 	camera.imageWidth = 400;
 	camera.samplesPerPixel = 100;
 	camera.maxDepth = 50;
-	camera.vfov = 90;
+	camera.vfov = 20;
+	camera.lookfrom = Point3(-2, 2, 1);
+	camera.lookat = Point3(0, 0, -1);
+	camera.vup = Vec3(0, 1, 0);
 
 	camera.Render(world);
 
