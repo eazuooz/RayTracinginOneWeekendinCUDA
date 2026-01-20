@@ -42,13 +42,32 @@ public:
     {
         attenuation = Color(1.0, 1.0, 1.0);
 
-        const double etaInOverEtaOut =
+        const double refractionRatio =
             hitRecord.bFrontFace ? (1.0 / mRefractionIndex) : mRefractionIndex;
 
         const Vec3 unitDirection = UnitVector(rayIn.Direction());
-        const Vec3 refracted = Refract(unitDirection, hitRecord.Normal, etaInOverEtaOut);
 
-        scattered = Ray(hitRecord.P, refracted);
+        const double cosTheta =
+            std::fmin(Dot(-unitDirection, hitRecord.Normal), 1.0);
+
+        const double sinTheta =
+            std::sqrt(1.0 - cosTheta * cosTheta);
+
+        const bool cannotRefract =
+            refractionRatio * sinTheta > 1.0;
+
+        Vec3 direction;
+
+        if (cannotRefract)
+        {
+            direction = Reflect(unitDirection, hitRecord.Normal);
+        }
+        else
+        {
+            direction = Refract(unitDirection, hitRecord.Normal, refractionRatio);
+        }
+
+        scattered = Ray(hitRecord.P, direction);
 
         return true;
     }
