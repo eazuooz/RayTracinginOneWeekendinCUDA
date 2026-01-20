@@ -28,6 +28,14 @@ private:
 class Dielectric : public Material
 {
 public:
+    static double Reflectance(double cosine, double refractionIndex)
+    {
+        // Schlick의 반사율 근사 사용
+        auto r0 = (1.0 - refractionIndex) / (1.0 + refractionIndex);
+        r0 = r0 * r0;
+        return r0 + (1.0 - r0) * std::pow((1.0 - cosine), 5);
+    }
+
     explicit Dielectric(double refractionIndex)
         : mRefractionIndex(refractionIndex)
     {
@@ -58,7 +66,7 @@ public:
 
         Vec3 direction;
 
-        if (cannotRefract)
+        if (cannotRefract || Reflectance(cosTheta, refractionRatio) > RandomDouble())
         {
             direction = Reflect(unitDirection, hitRecord.Normal);
         }
