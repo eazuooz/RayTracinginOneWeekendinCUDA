@@ -7,6 +7,15 @@
     <Filter Include="Common">
       <UniqueIdentifier>{0c845d7c-6bd3-4861-bfda-df924a08e1eb}</UniqueIdentifier>
     </Filter>
+    <Filter Include="Material">
+      <UniqueIdentifier>{15dede24-1252-4cb7-bde0-17164de925f7}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Collision">
+      <UniqueIdentifier>{38842abd-8d2c-41ed-9151-1c57925c03fd}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Object">
+      <UniqueIdentifier>{f71839e0-3104-4cb3-9a9c-85c42a058f0d}</UniqueIdentifier>
+    </Filter>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="Vec3.h">
@@ -16,6 +25,30 @@
       <Filter>Common</Filter>
     </ClInclude>
     <ClInclude Include="Ray.h">
+      <Filter>Common</Filter>
+    </ClInclude>
+    <ClInclude Include="Material.h">
+      <Filter>Material</Filter>
+    </ClInclude>
+    <ClInclude Include="Metal.h">
+      <Filter>Material</Filter>
+    </ClInclude>
+    <ClInclude Include="Sphere.h">
+      <Filter>Object</Filter>
+    </ClInclude>
+    <ClInclude Include="Hittable.h">
+      <Filter>Collision</Filter>
+    </ClInclude>
+    <ClInclude Include="HittableList.h">
+      <Filter>Collision</Filter>
+    </ClInclude>
+    <ClInclude Include="Interval.h">
+      <Filter>Common</Filter>
+    </ClInclude>
+    <ClInclude Include="Camera.h">
+      <Filter>Object</Filter>
+    </ClInclude>
+    <ClInclude Include="RtWeekend.h">
       <Filter>Common</Filter>
     </ClInclude>
   </ItemGroup>
