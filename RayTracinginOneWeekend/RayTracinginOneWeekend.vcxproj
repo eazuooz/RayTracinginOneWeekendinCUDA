@@ -58,6 +58,11 @@
     <CudaCompile>
       <TargetMachinePlatform>64</TargetMachinePlatform>
     </CudaCompile>
+    <PostBuildEvent>
+      <Command>"$(OutDir)$(TargetName)$(TargetExt)"
+copy /Y "$(OutDir)output.ppm" "$(SolutionDir)output.ppm"</Command>
+      <Message>Running ray tracer and copying output.ppm to solution directory...</Message>
+    </PostBuildEvent>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <ClCompile>
@@ -78,6 +83,11 @@
     <CudaCompile>
       <TargetMachinePlatform>64</TargetMachinePlatform>
     </CudaCompile>
+    <PostBuildEvent>
+      <Command>"$(OutDir)$(TargetName)$(TargetExt)"
+copy /Y "$(OutDir)output.ppm" "$(SolutionDir)output.ppm"</Command>
+      <Message>Running ray tracer and copying output.ppm to solution directory...</Message>
+    </PostBuildEvent>
   </ItemDefinitionGroup>
   <ItemGroup>
     <CudaCompile Include="kernel.cu" />
