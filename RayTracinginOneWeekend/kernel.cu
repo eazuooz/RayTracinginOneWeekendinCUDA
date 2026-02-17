@@ -23,10 +23,54 @@ void checkCuda(cudaError_t result, char const* const func, const char* const fil
 	}
 }
 
-// === Chapter 3: Ray 클래스를 사용한 하늘 배경 렌더링 ===
-// 레이 방향의 y 성분에 따라 흰색 → 하늘색 그라디언트를 생성
+// === Chapter 4: 구체 교차 판정 ===
+//
+// 레이-구체 교차 판정은 이차방정식의 판별식(discriminant)을 이용한다.
+//
+// 구체 방정식: (P - C) · (P - C) = r²
+//   P: 구체 표면 위의 점, C: 구체 중심, r: 반지름
+//
+// 레이 방정식: P(t) = O + t·D
+//   O: 레이 원점(Origin), D: 레이 방향(Direction), t: 매개변수
+//
+// 레이를 구체 방정식에 대입하면:
+//   (O + t·D - C) · (O + t·D - C) = r²
+//
+// oc = O - C 로 치환하면:
+//   (oc + t·D) · (oc + t·D) = r²
+//   t²(D·D) + 2t(oc·D) + (oc·oc - r²) = 0
+//
+// 이것은 at² + bt + c = 0 형태의 이차방정식이다:
+//   a = D · D           (레이 방향 벡터의 길이 제곱)
+//   b = 2 * (oc · D)    (레이 원점~구체 중심 벡터와 방향의 내적 × 2)
+//   c = oc · oc - r²    (원점~중심 거리 제곱 - 반지름 제곱)
+//
+// 판별식 = b² - 4ac
+//   > 0: 레이가 구체와 두 점에서 교차 (관통)
+//   = 0: 레이가 구체에 접함 (한 점에서 교차)
+//   < 0: 교차하지 않음
+//
+__device__ bool HitSphere(const Vector3& center, double radius, const Ray& r)
+{
+	// oc: 레이 원점에서 구체 중심까지의 벡터
+	Vector3 oc = r.Origin() - center;
+
+	// 이차방정식 계수 계산
+	double a = Dot(r.Direction(), r.Direction());
+	double b = 2.0 * Dot(oc, r.Direction());
+	double c = Dot(oc, oc) - radius * radius;
+
+	// 판별식으로 교차 여부 판정
+	double discriminant = b * b - 4.0 * a * c;
+	return (discriminant > 0.0);
+}
+
+// 구체에 맞으면 빨간색, 아니면 하늘 배경 그라디언트
 __device__ Color RayColor(const Ray& r)
 {
+	if (HitSphere(Vector3(0.0, 0.0, -1.0), 0.5, r))
+		return Color(1.0, 0.0, 0.0);
+
 	Vector3 unitDirection = UnitVector(r.Direction());
 	double t = 0.5 * (unitDirection.Y() + 1.0);
 	return (1.0 - t) * Color(1.0, 1.0, 1.0) + t * Color(0.5, 0.7, 1.0);
