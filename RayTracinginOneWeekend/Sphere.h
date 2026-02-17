@@ -3,60 +3,51 @@
 #define SPHERE_H
 
 #include "Hittable.h"
-#include "Vec3.h"
 
 class Sphere : public Hittable
 {
 public:
-    Sphere(const Point3& center, double radius, const std::shared_ptr<Material>& material)
-        : mCenter(center)
-        , mRadius(std::fmax(0.0, radius))
-        , mMaterial(material)
+    __device__ Sphere() {}
+    __device__ Sphere(const Point3& center, double radius)
+        : mCenter(center), mRadius(radius) {}
+
+    __device__ bool Hit(const Ray& ray, double tMin, double tMax, HitRecord& hitRecord) const override
     {
-    }
+        Vector3 oc = ray.Origin() - mCenter;
+        double a = Dot(ray.Direction(), ray.Direction());
+        double b = Dot(oc, ray.Direction());
+        double c = Dot(oc, oc) - mRadius * mRadius;
+        double discriminant = b * b - a * c;
 
-    bool Hit(const Ray& ray, const Interval& rayT, HitRecord& hitRecord) const override
-    {
-        Vec3 originToCenter = mCenter - ray.Origin();
-
-        auto a = ray.Direction().LengthSquared();
-        auto h = Dot(ray.Direction(), originToCenter);
-        auto c = originToCenter.LengthSquared() - mRadius * mRadius;
-
-        auto discriminant = h * h - a * c;
-        if (discriminant < 0.0)
+        if (discriminant > 0.0)
         {
-            return false;
-        }
-
-        auto squareRootDiscriminant = std::sqrt(discriminant);
-
-        // «„øÎ ∞°¥…«— π¸¿ß ≥ªø° ¿÷¥¬ ∞°¿Â ∞°±ÓøÓ ±Ÿ¿ª √£Ω¿¥œ¥Ÿ
-        auto root = (h - squareRootDiscriminant) / a;
-        if (!rayT.Surrounds(root))
-        {
-            root = (h + squareRootDiscriminant) / a;
-            if (!rayT.Surrounds(root))
+            // Í∞ÄÍπåÏö¥ ÍµêÏ∞®Ï†ê Î®ºÏ†Ä ÌôïÏù∏
+            double temp = (-b - sqrt(discriminant)) / a;
+            if (temp < tMax && temp > tMin)
             {
-                return false;
+                hitRecord.T = temp;
+                hitRecord.P = ray.At(hitRecord.T);
+                hitRecord.Normal = (hitRecord.P - mCenter) / mRadius;
+                return true;
+            }
+
+            // Î®º ÍµêÏ∞®Ï†ê ÌôïÏù∏
+            temp = (-b + sqrt(discriminant)) / a;
+            if (temp < tMax && temp > tMin)
+            {
+                hitRecord.T = temp;
+                hitRecord.P = ray.At(hitRecord.T);
+                hitRecord.Normal = (hitRecord.P - mCenter) / mRadius;
+                return true;
             }
         }
 
-        hitRecord.T = root;
-        hitRecord.P = ray.At(hitRecord.T);
-
-
-        Vec3 outwardNormal = (hitRecord.P - mCenter) / mRadius;
-        hitRecord.SetFaceNormal(ray, outwardNormal);
-        hitRecord.Material = mMaterial;
-
-        return true;
+        return false;
     }
 
 private:
     Point3 mCenter;
     double mRadius;
-    std::shared_ptr<Material> mMaterial;
 };
 
 #endif

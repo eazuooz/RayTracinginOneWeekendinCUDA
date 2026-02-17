@@ -2,48 +2,30 @@
 #ifndef HITTABLE_LIST_H
 #define HITTABLE_LIST_H
 
-#include "RtWeekend.h"
 #include "Hittable.h"
 
-#include <vector>
-
-
-
+// GPU에서는 std::vector를 사용할 수 없으므로
+// Hittable 포인터 배열(Hittable**)을 직접 관리한다
 class HittableList : public Hittable
 {
 public:
-    HittableList() = default;
+    __device__ HittableList() {}
+    __device__ HittableList(Hittable** list, int count)
+        : mList(list), mCount(count) {}
 
-    explicit HittableList(const std::shared_ptr<Hittable>& object)
+    __device__ bool Hit(const Ray& ray, double tMin, double tMax, HitRecord& hitRecord) const override
     {
-        Add(object);
-    }
-
-    void Clear()
-    {
-        mObjects.clear();
-    }
-
-    void Add(const std::shared_ptr<Hittable>& object)
-    {
-        mObjects.push_back(object);
-    }
-
-    bool Hit(const Ray& ray, const Interval& rayT, HitRecord& hitRecord) const override
-    {
-        HitRecord temporaryHitRecord;
+        HitRecord tempRecord;
         bool bHitAnything = false;
-        auto closestSoFar = rayT.Max;
+        double closestSoFar = tMax;
 
-        for (const auto& object : mObjects)
+        for (int i = 0; i < mCount; i++)
         {
-            Interval currentRayT(rayT.Min, closestSoFar);
-
-            if (object->Hit(ray, currentRayT, temporaryHitRecord))
+            if (mList[i]->Hit(ray, tMin, closestSoFar, tempRecord))
             {
                 bHitAnything = true;
-                closestSoFar = temporaryHitRecord.T;
-                hitRecord = temporaryHitRecord;
+                closestSoFar = tempRecord.T;
+                hitRecord = tempRecord;
             }
         }
 
@@ -51,7 +33,8 @@ public:
     }
 
 private:
-    std::vector<std::shared_ptr<Hittable>> mObjects;
+    Hittable** mList;
+    int mCount;
 };
 
 #endif

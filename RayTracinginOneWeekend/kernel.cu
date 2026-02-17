@@ -8,6 +8,9 @@
 
 #include "Vec3.h"
 #include "Ray.h"
+#include "Hittable.h"
+#include "HittableList.h"
+#include "Sphere.h"
 
 // CUDA 에러 체크 매크로
 #define checkCudaErrors(val) checkCuda((val), #val, __FILE__, __LINE__)
@@ -23,61 +26,30 @@ void checkCuda(cudaError_t result, char const* const func, const char* const fil
 	}
 }
 
-// === Chapter 4: 구체 교차 판정 ===
-//
-// 레이-구체 교차 판정은 이차방정식의 판별식(discriminant)을 이용한다.
-//
-// 구체 방정식: (P - C) · (P - C) = r²
-//   P: 구체 표면 위의 점, C: 구체 중심, r: 반지름
-//
-// 레이 방정식: P(t) = O + t·D
-//   O: 레이 원점(Origin), D: 레이 방향(Direction), t: 매개변수
-//
-// 레이를 구체 방정식에 대입하면:
-//   (O + t·D - C) · (O + t·D - C) = r²
-//
-// oc = O - C 로 치환하면:
-//   (oc + t·D) · (oc + t·D) = r²
-//   t²(D·D) + 2t(oc·D) + (oc·oc - r²) = 0
-//
-// 이것은 at² + bt + c = 0 형태의 이차방정식이다:
-//   a = D · D           (레이 방향 벡터의 길이 제곱)
-//   b = 2 * (oc · D)    (레이 원점~구체 중심 벡터와 방향의 내적 × 2)
-//   c = oc · oc - r²    (원점~중심 거리 제곱 - 반지름 제곱)
-//
-// 판별식 = b² - 4ac
-//   > 0: 레이가 구체와 두 점에서 교차 (관통)
-//   = 0: 레이가 구체에 접함 (한 점에서 교차)
-//   < 0: 교차하지 않음
-//
-__device__ bool HitSphere(const Vector3& center, double radius, const Ray& r)
+// === Chapter 5: 법선 벡터 시각화 ===
+// 오브젝트에 맞으면 법선 벡터를 색상으로 변환하여 표시
+// 법선 (-1~1) → 색상 (0~1) 매핑: color = 0.5 * (normal + 1)
+__device__ Color RayColor(const Ray& r, Hittable** world)
 {
-	// oc: 레이 원점에서 구체 중심까지의 벡터
-	Vector3 oc = r.Origin() - center;
+	HitRecord rec;
+	if ((*world)->Hit(r, 0.0, DBL_MAX, rec))
+	{
+		// 법선 벡터를 RGB 색상으로 변환
+		// X(좌우) → R, Y(상하) → G, Z(앞뒤) → B
+		return 0.5 * Color(rec.Normal.X() + 1.0,
+		                    rec.Normal.Y() + 1.0,
+		                    rec.Normal.Z() + 1.0);
+	}
 
-	// 이차방정식 계수 계산
-	double a = Dot(r.Direction(), r.Direction());
-	double b = 2.0 * Dot(oc, r.Direction());
-	double c = Dot(oc, oc) - radius * radius;
-
-	// 판별식으로 교차 여부 판정
-	double discriminant = b * b - 4.0 * a * c;
-	return (discriminant > 0.0);
-}
-
-// 구체에 맞으면 빨간색, 아니면 하늘 배경 그라디언트
-__device__ Color RayColor(const Ray& r)
-{
-	if (HitSphere(Vector3(0.0, 0.0, -1.0), 0.5, r))
-		return Color(1.0, 0.0, 0.0);
-
+	// 배경: 하늘 그라디언트
 	Vector3 unitDirection = UnitVector(r.Direction());
 	double t = 0.5 * (unitDirection.Y() + 1.0);
 	return (1.0 - t) * Color(1.0, 1.0, 1.0) + t * Color(0.5, 0.7, 1.0);
 }
 
 __global__ void render(Vector3* frameBuffer, int maxX, int maxY,
-	Vector3 lowerLeftCorner, Vector3 horizontal, Vector3 vertical, Vector3 origin)
+	Vector3 lowerLeftCorner, Vector3 horizontal, Vector3 vertical, Vector3 origin,
+	Hittable** world)
 {
 	int i = threadIdx.x + blockIdx.x * blockDim.x;
 	int j = threadIdx.y + blockIdx.y * blockDim.y;
@@ -88,7 +60,31 @@ __global__ void render(Vector3* frameBuffer, int maxX, int maxY,
 	double u = double(i) / double(maxX);
 	double v = double(j) / double(maxY);
 	Ray r(origin, lowerLeftCorner + u * horizontal + v * vertical);
-	frameBuffer[pixelIndex] = RayColor(r);
+	frameBuffer[pixelIndex] = RayColor(r, world);
+}
+
+// GPU 메모리에서 월드 오브젝트를 생성하는 커널
+// CUDA에서 가상 함수(virtual)를 사용하려면 객체를 GPU에서 new로 생성해야 함
+__global__ void createWorld(Hittable** list, Hittable** world)
+{
+	if (threadIdx.x == 0 && blockIdx.x == 0)
+	{
+		// 구체 2개: 작은 구체(중앙) + 큰 구체(바닥)
+		list[0] = new Sphere(Vector3(0.0, 0.0, -1.0), 0.5);
+		list[1] = new Sphere(Vector3(0.0, -100.5, -1.0), 100.0);
+		*world = new HittableList(list, 2);
+	}
+}
+
+// GPU에서 할당한 월드 오브젝트를 해제하는 커널
+__global__ void freeWorld(Hittable** list, Hittable** world)
+{
+	if (threadIdx.x == 0 && blockIdx.x == 0)
+	{
+		delete list[0];
+		delete list[1];
+		delete *world;
+	}
 }
 
 int main()
@@ -108,6 +104,16 @@ int main()
 	Vector3* frameBuffer;
 	checkCudaErrors(cudaMallocManaged((void**)&frameBuffer, frameBufferSize));
 
+	// 월드 오브젝트를 GPU 메모리에 할당
+	Hittable** list;
+	checkCudaErrors(cudaMalloc((void**)&list, 2 * sizeof(Hittable*)));
+	Hittable** world;
+	checkCudaErrors(cudaMalloc((void**)&world, sizeof(Hittable*)));
+
+	createWorld<<<1, 1>>>(list, world);
+	checkCudaErrors(cudaGetLastError());
+	checkCudaErrors(cudaDeviceSynchronize());
+
 	clock_t start, stop;
 	start = clock();
 
@@ -117,7 +123,8 @@ int main()
 		Vector3(-2.0, -1.0, -1.0),   // lowerLeftCorner
 		Vector3(4.0, 0.0, 0.0),      // horizontal
 		Vector3(0.0, 2.0, 0.0),      // vertical
-		Vector3(0.0, 0.0, 0.0));     // origin
+		Vector3(0.0, 0.0, 0.0),      // origin
+		world);
 	checkCudaErrors(cudaGetLastError());
 	checkCudaErrors(cudaDeviceSynchronize());
 
@@ -147,6 +154,13 @@ int main()
 	outFile.close();
 	std::cerr << "\nDone. Saved to output.ppm\n";
 
+	// GPU 메모리 해제 (역순)
+	freeWorld<<<1, 1>>>(list, world);
+	checkCudaErrors(cudaGetLastError());
+	checkCudaErrors(cudaDeviceSynchronize());
+
+	checkCudaErrors(cudaFree(list));
+	checkCudaErrors(cudaFree(world));
 	checkCudaErrors(cudaFree(frameBuffer));
 
 	return 0;

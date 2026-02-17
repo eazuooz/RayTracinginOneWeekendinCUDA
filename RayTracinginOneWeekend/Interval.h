@@ -2,60 +2,47 @@
 #ifndef INTERVAL_H
 #define INTERVAL_H
 
-#include "RTWeekend.h"
+#include "cuda_runtime.h"
+#include <cfloat>
 
 struct Interval
 {
-    Interval()
-        : Min(+Infinity)
-        , Max(-Infinity)
+    double Min;
+    double Max;
+
+    __host__ __device__ Interval()
+        : Min(+DBL_MAX)
+        , Max(-DBL_MAX)
     {
     }
 
-    Interval(double minimum, double maximum)
+    __host__ __device__ Interval(double minimum, double maximum)
         : Min(minimum)
         , Max(maximum)
     {
     }
 
-    double Size() const
+    __host__ __device__ double Size() const
     {
         return Max - Min;
     }
 
-    bool Contains(double value) const
+    __host__ __device__ bool Contains(double value) const
     {
         return Min <= value && value <= Max;
     }
 
-    bool Surrounds(double value) const
+    __host__ __device__ bool Surrounds(double value) const
     {
         return Min < value && value < Max;
     }
 
-    double Clamp(double value) const
+    __host__ __device__ double Clamp(double value) const
     {
-        if (value < Min)
-        {
-            return Min;
-        }
-
-        if (value > Max)
-        {
-            return Max;
-        }
-
+        if (value < Min) return Min;
+        if (value > Max) return Max;
         return value;
     }
-
-    static const Interval Empty;
-    static const Interval Universe;
-
-    double Min = 0.0;
-    double Max = 0.0;
 };
-
-const Interval Interval::Empty(+Infinity, -Infinity);
-const Interval Interval::Universe(-Infinity, +Infinity);
 
 #endif
