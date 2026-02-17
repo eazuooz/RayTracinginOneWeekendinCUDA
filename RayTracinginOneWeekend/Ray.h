@@ -7,15 +7,15 @@
 class Ray
 {
 public:
-    Ray() {}
+    __device__ Ray() {}
 
-    Ray(const Point3& origin, const Vector3& direction) 
+    __device__ Ray(const Point3& origin, const Vector3& direction)
         : mOrig(origin), mDir(direction) {}
 
-    const Point3& Origin() const { return mOrig; }
-    const Vector3& Direction() const { return mDir; }
+    __device__ const Point3& Origin() const { return mOrig; }
+    __device__ const Vector3& Direction() const { return mDir; }
 
-    Point3 At(double t) const
+    __device__ Point3 At(double t) const
     {
         return mOrig + t * mDir;
     }

@@ -7,8 +7,9 @@
 #include <fstream>
 
 #include "Vec3.h"
+#include "Ray.h"
 
-// CUDA 에러 체크 매크로 - 에러 발생 시 파일명, 라인 번호와 함께 에러 메시지 출력
+// CUDA 에러 체크 매크로
 #define checkCudaErrors(val) checkCuda((val), #val, __FILE__, __LINE__)
 
 void checkCuda(cudaError_t result, char const* const func, const char* const file, int const line)
@@ -22,9 +23,17 @@ void checkCuda(cudaError_t result, char const* const func, const char* const fil
 	}
 }
 
-// === Chapter 2: Vec3 클래스를 사용한 이미지 렌더링 CUDA 커널 ===
-// 각 스레드가 하나의 픽셀을 담당하여 Vector3(Color)로 색상을 계산
-__global__ void render(Vector3* frameBuffer, int maxX, int maxY)
+// === Chapter 3: Ray 클래스를 사용한 하늘 배경 렌더링 ===
+// 레이 방향의 y 성분에 따라 흰색 → 하늘색 그라디언트를 생성
+__device__ Color RayColor(const Ray& r)
+{
+	Vector3 unitDirection = UnitVector(r.Direction());
+	double t = 0.5 * (unitDirection.Y() + 1.0);
+	return (1.0 - t) * Color(1.0, 1.0, 1.0) + t * Color(0.5, 0.7, 1.0);
+}
+
+__global__ void render(Vector3* frameBuffer, int maxX, int maxY,
+	Vector3 lowerLeftCorner, Vector3 horizontal, Vector3 vertical, Vector3 origin)
 {
 	int i = threadIdx.x + blockIdx.x * blockDim.x;
 	int j = threadIdx.y + blockIdx.y * blockDim.y;
@@ -32,11 +41,10 @@ __global__ void render(Vector3* frameBuffer, int maxX, int maxY)
 	if ((i >= maxX) || (j >= maxY)) return;
 
 	int pixelIndex = j * maxX + i;
-	frameBuffer[pixelIndex] = Color(
-		double(i) / double(maxX),
-		double(j) / double(maxY),
-		0.2
-	);
+	double u = double(i) / double(maxX);
+	double v = double(j) / double(maxY);
+	Ray r(origin, lowerLeftCorner + u * horizontal + v * vertical);
+	frameBuffer[pixelIndex] = RayColor(r);
 }
 
 int main()
@@ -53,7 +61,6 @@ int main()
 	int numPixels = imageWidth * imageHeight;
 	size_t frameBufferSize = numPixels * sizeof(Vector3);
 
-	// GPU Unified Memory로 프레임버퍼 할당 (Vector3 배열)
 	Vector3* frameBuffer;
 	checkCudaErrors(cudaMallocManaged((void**)&frameBuffer, frameBufferSize));
 
@@ -62,7 +69,11 @@ int main()
 
 	dim3 blocks(imageWidth / blockWidth + 1, imageHeight / blockHeight + 1);
 	dim3 threads(blockWidth, blockHeight);
-	render<<<blocks, threads>>>(frameBuffer, imageWidth, imageHeight);
+	render<<<blocks, threads>>>(frameBuffer, imageWidth, imageHeight,
+		Vector3(-2.0, -1.0, -1.0),   // lowerLeftCorner
+		Vector3(4.0, 0.0, 0.0),      // horizontal
+		Vector3(0.0, 2.0, 0.0),      // vertical
+		Vector3(0.0, 0.0, 0.0));     // origin
 	checkCudaErrors(cudaGetLastError());
 	checkCudaErrors(cudaDeviceSynchronize());
 
