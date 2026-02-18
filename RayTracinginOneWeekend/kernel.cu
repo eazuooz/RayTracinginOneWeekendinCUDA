@@ -32,10 +32,12 @@ void CheckCuda(cudaError_t result, char const* const func, const char* const fil
 	}
 }
 
-// === Chapter 11: 피사계 심도 (Defocus Blur) ===
+// === Chapter 12: 최종 렌더 (Final Render) ===
 //
-// 카메라에 aperture(조리개)와 focusDist(초점 거리)를 추가하여
-// 초점 평면의 물체만 선명하고, 나머지는 흐릿하게 렌더링한다.
+// "Ray Tracing in One Weekend"의 표지 장면을 GPU에서 렌더링한다.
+// 22×22 격자에 랜덤 소형 구체(Lambertian/Metal/Dielectric)를 배치하고,
+// 중앙에 유리/난반사/금속 대형 구체 3개를 놓는다.
+// 총 구체 수: 22*22 + 1(바닥) + 3(대형) = 최대 488개
 //
 // GPU에서 재귀 대신 루프(최대 50회)로 레이를 추적한다.
 // 매 반복마다 재질의 Scatter 함수로 감쇠 색상과 새 레이를 얻는다.
@@ -73,7 +75,16 @@ __device__ Color RayColor(const Ray& r, Hittable** world, curandState* randState
 	return Color(0.0, 0.0, 0.0);
 }
 
-// cuRAND 초기화 커널
+// 월드 생성용 cuRAND 초기화 (단일 스레드)
+__global__ void RandInit(curandState* randState)
+{
+	if (threadIdx.x == 0 && blockIdx.x == 0)
+	{
+		curand_init(1984, 0, 0, randState);
+	}
+}
+
+// 렌더링용 cuRAND 초기화 (픽셀당 1개)
 __global__ void RenderInit(int maxX, int maxY, curandState* randState)
 {
 	int i = threadIdx.x + blockIdx.x * blockDim.x;
@@ -85,7 +96,7 @@ __global__ void RenderInit(int maxX, int maxY, curandState* randState)
 	curand_init(1984, pixelIndex, 0, &randState[pixelIndex]);
 }
 
-// 렌더 커널: 안티앨리어싱 + 재질 기반 산란
+// 렌더 커널: 안티앨리어싱 + 재질 기반 산란 + 피사계 심도
 __global__ void Render(
 	Vector3* frameBuffer, int maxX, int maxY, int numSamples,
 	Camera** camera, Hittable** world, curandState* randState)
@@ -117,61 +128,91 @@ __global__ void Render(
 	frameBuffer[pixelIndex] = col;
 }
 
-// GPU에서 월드 오브젝트, 재질, 카메라를 생성
-__global__ void CreateWorld(Hittable** list, Hittable** world, Camera** camera, int imageWidth, int imageHeight)
+// curand_uniform 단축 매크로 (CreateWorld 내부에서 사용)
+#define RND (curand_uniform(&localRandState))
+
+// GPU에서 랜덤 장면을 생성하는 커널
+// 22×22 격자에 소형 구체를 랜덤 배치하고, 대형 구체 3개와 바닥을 추가한다.
+// 구체 배치 시 (4, 0.2, 0) 근처는 대형 구체와 겹치지 않도록 건너뛴다.
+__global__ void CreateWorld(
+	Hittable** list, Hittable** world, Camera** camera,
+	int imageWidth, int imageHeight, curandState* randState)
 {
 	if (threadIdx.x == 0 && blockIdx.x == 0)
 	{
-		// 바닥: 연한 노란색 Lambertian
+		curandState localRandState = *randState;
+
+		// [0] 바닥: 거대한 회색 Lambertian 구체
 		list[0] = new Sphere(
-			Vector3(0.0, -100.5, -1.0), 100.0,
-			new Lambertian(Color(0.8, 0.8, 0.0)));
+			Vector3(0.0, -1000.0, -1.0), 1000.0,
+			new Lambertian(Color(0.5, 0.5, 0.5)));
 
-		// 중앙: 파란 계열 난반사 구체
-		list[1] = new Sphere(
-			Vector3(0.0, 0.0, -1.0), 0.5,
-			new Lambertian(Color(0.1, 0.2, 0.5)));
+		// [1~] 22×22 격자에 소형 구체를 랜덤 배치
+		int i = 1;
+		for (int a = -11; a < 11; a++)
+		{
+			for (int b = -11; b < 11; b++)
+			{
+				double chooseMat = RND;
+				Vector3 center(a + RND, 0.2, b + RND);
 
-		// 오른쪽: 금속 구체 (선명한 반사)
-		list[2] = new Sphere(
-			Vector3(1.0, 0.0, -1.0), 0.5,
-			new Metal(Color(0.8, 0.6, 0.2), 0.0));
+				if (chooseMat < 0.8)
+				{
+					// 80%: Lambertian (랜덤 색상의 난반사)
+					list[i++] = new Sphere(
+						center, 0.2,
+						new Lambertian(Color(RND * RND, RND * RND, RND * RND)));
+				}
+				else if (chooseMat < 0.95)
+				{
+					// 15%: Metal (밝은 랜덤 색상, 랜덤 fuzz)
+					list[i++] = new Sphere(
+						center, 0.2,
+						new Metal(
+							Color(0.5 * (1.0 + RND), 0.5 * (1.0 + RND), 0.5 * (1.0 + RND)),
+							0.5 * RND));
+				}
+				else
+				{
+					// 5%: Dielectric (유리)
+					list[i++] = new Sphere(center, 0.2, new Dielectric(1.5));
+				}
+			}
+		}
 
-		// 왼쪽: 유리 구체 (굴절률 1.5)
-		list[3] = new Sphere(
-			Vector3(-1.0, 0.0, -1.0), 0.5,
-			new Dielectric(1.5));
+		// 대형 구체 3개: 유리, Lambertian, Metal
+		list[i++] = new Sphere(Vector3(0.0, 1.0, 0.0), 1.0, new Dielectric(1.5));
+		list[i++] = new Sphere(Vector3(-4.0, 1.0, 0.0), 1.0, new Lambertian(Color(0.4, 0.2, 0.1)));
+		list[i++] = new Sphere(Vector3(4.0, 1.0, 0.0), 1.0, new Metal(Color(0.7, 0.6, 0.5), 0.0));
 
-		// 왼쪽 내부: 음수 반지름으로 속이 빈 유리 구체 (버블 효과)
-		list[4] = new Sphere(
-			Vector3(-1.0, 0.0, -1.0), -0.45,
-			new Dielectric(1.5));
+		*randState = localRandState;
+		*world = new HittableList(list, 22 * 22 + 1 + 3);
 
-		*world = new HittableList(list, 5);
-
-		// 피사계 심도 카메라: (3,3,2)에서 (0,0,-1)을 바라봄
-		Vector3 lookfrom(3.0, 3.0, 2.0);
-		Vector3 lookat(0.0, 0.0, -1.0);
-		double distToFocus = (lookfrom - lookat).Length();
-		double aperture = 2.0;
+		// 카메라: (13,2,3)에서 원점을 바라봄, 얕은 피사계 심도
+		Vector3 lookfrom(13.0, 2.0, 3.0);
+		Vector3 lookat(0.0, 0.0, 0.0);
+		double distToFocus = 10.0;
+		double aperture = 0.1;
 
 		*camera = new Camera(
-			lookfrom,                    // lookfrom
-			lookat,                      // lookat
-			Vector3(0.0, 1.0, 0.0),     // vup
-			20.0,                        // vfov (degrees)
-			double(imageWidth) / double(imageHeight),  // aspect ratio
-			aperture,                    // 조리개 크기
-			distToFocus);               // 초점 거리
+			lookfrom,
+			lookat,
+			Vector3(0.0, 1.0, 0.0),
+			30.0,
+			double(imageWidth) / double(imageHeight),
+			aperture,
+			distToFocus);
 	}
 }
 
+#undef RND
+
 // GPU 오브젝트 해제 커널
-__global__ void FreeWorld(Hittable** list, Hittable** world, Camera** camera)
+__global__ void FreeWorld(Hittable** list, int numHittables, Hittable** world, Camera** camera)
 {
 	if (threadIdx.x == 0 && blockIdx.x == 0)
 	{
-		for (int i = 0; i < 5; i++)
+		for (int i = 0; i < numHittables; i++)
 		{
 			delete list[i];
 		}
@@ -184,7 +225,7 @@ int main()
 {
 	int imageWidth = 1440;
 	int imageHeight = 720;
-	int numSamples = 30;
+	int numSamples = 10;
 
 	int blockWidth = 8;
 	int blockHeight = 8;
@@ -202,18 +243,29 @@ int main()
 	Vector3* frameBuffer;
 	checkCudaErrors(cudaMallocManaged((void**)&frameBuffer, frameBufferSize));
 
+	// 렌더링용 cuRAND 상태 (픽셀당 1개)
 	curandState* randState;
 	checkCudaErrors(cudaMalloc((void**)&randState, numPixels * sizeof(curandState)));
 
-	// 월드 + 카메라를 GPU 메모리에 생성 (구체 5개)
+	// 월드 생성용 cuRAND 상태 (단일)
+	curandState* randState2;
+	checkCudaErrors(cudaMalloc((void**)&randState2, sizeof(curandState)));
+
+	RandInit<<<1, 1>>>(randState2);
+	checkCudaErrors(cudaGetLastError());
+	checkCudaErrors(cudaDeviceSynchronize());
+
+	// 월드 + 카메라를 GPU 메모리에 생성
+	// 최대 구체 수: 22*22(소형) + 1(바닥) + 3(대형) = 488
+	int numHittables = 22 * 22 + 1 + 3;
 	Hittable** list;
-	checkCudaErrors(cudaMalloc((void**)&list, 5 * sizeof(Hittable*)));
+	checkCudaErrors(cudaMalloc((void**)&list, numHittables * sizeof(Hittable*)));
 	Hittable** world;
 	checkCudaErrors(cudaMalloc((void**)&world, sizeof(Hittable*)));
 	Camera** camera;
 	checkCudaErrors(cudaMalloc((void**)&camera, sizeof(Camera*)));
 
-	CreateWorld<<<1, 1>>>(list, world, camera, imageWidth, imageHeight);
+	CreateWorld<<<1, 1>>>(list, world, camera, imageWidth, imageHeight, randState2);
 	checkCudaErrors(cudaGetLastError());
 	checkCudaErrors(cudaDeviceSynchronize());
 
@@ -262,11 +314,12 @@ int main()
 	std::cerr << "\nDone. Saved to output.ppm\n";
 
 	// GPU 메모리 해제
-	FreeWorld<<<1, 1>>>(list, world, camera);
+	FreeWorld<<<1, 1>>>(list, numHittables, world, camera);
 	checkCudaErrors(cudaGetLastError());
 	checkCudaErrors(cudaDeviceSynchronize());
 
 	checkCudaErrors(cudaFree(randState));
+	checkCudaErrors(cudaFree(randState2));
 	checkCudaErrors(cudaFree(list));
 	checkCudaErrors(cudaFree(world));
 	checkCudaErrors(cudaFree(camera));
