@@ -29,21 +29,52 @@ void checkCuda(cudaError_t result, char const* const func, const char* const fil
 	}
 }
 
-// === Chapter 6: 안티앨리어싱 ===
-// 법선 벡터를 색상으로 변환 (이전과 동일)
-__device__ Color RayColor(const Ray& r, Hittable** world)
+// === Chapter 7: 난반사 (Diffuse) ===
+
+// cuRAND를 이용한 단위 구 내부의 랜덤 점 생성
+// rejection sampling: 랜덤 점을 생성하고 구 내부에 있을 때까지 반복
+__device__ Vector3 RandomInUnitSphere(curandState* localRandState)
 {
-	HitRecord rec;
-	if ((*world)->Hit(r, 0.001, DBL_MAX, rec))
+	Vector3 p;
+	do {
+		p = 2.0 * Vector3(curand_uniform(localRandState),
+		                   curand_uniform(localRandState),
+		                   curand_uniform(localRandState)) - Vector3(1.0, 1.0, 1.0);
+	} while (p.LengthSquared() >= 1.0);
+	return p;
+}
+
+// 난반사 렌더링 - 재귀 대신 루프로 구현
+// GPU에서 재귀가 깊어지면 스택 오버플로우가 발생하므로
+// 최대 50번 반복하는 루프로 변환한다.
+// 매 반복마다 감쇠율(attenuation) 0.5를 곱하여 빛이 점점 약해진다.
+__device__ Color RayColor(const Ray& r, Hittable** world, curandState* localRandState)
+{
+	Ray currentRay = r;
+	double currentAttenuation = 1.0;
+
+	for (int i = 0; i < 50; i++)
 	{
-		return 0.5 * Color(rec.Normal.X() + 1.0,
-		                    rec.Normal.Y() + 1.0,
-		                    rec.Normal.Z() + 1.0);
+		HitRecord rec;
+		if ((*world)->Hit(currentRay, 0.001, DBL_MAX, rec))
+		{
+			// 교차점에서 법선 + 랜덤 방향으로 새 레이 생성 (난반사)
+			Vector3 target = rec.P + rec.Normal + RandomInUnitSphere(localRandState);
+			currentAttenuation *= 0.5;
+			currentRay = Ray(rec.P, target - rec.P);
+		}
+		else
+		{
+			// 하늘 배경
+			Vector3 unitDirection = UnitVector(currentRay.Direction());
+			double t = 0.5 * (unitDirection.Y() + 1.0);
+			Color c = (1.0 - t) * Color(1.0, 1.0, 1.0) + t * Color(0.5, 0.7, 1.0);
+			return currentAttenuation * c;
+		}
 	}
 
-	Vector3 unitDirection = UnitVector(r.Direction());
-	double t = 0.5 * (unitDirection.Y() + 1.0);
-	return (1.0 - t) * Color(1.0, 1.0, 1.0) + t * Color(0.5, 0.7, 1.0);
+	// 50번 반복 초과: 빛이 흡수됨 (검정)
+	return Color(0.0, 0.0, 0.0);
 }
 
 // 각 픽셀마다 cuRAND 난수 생성기를 초기화하는 커널
@@ -76,14 +107,21 @@ __global__ void render(Vector3* frameBuffer, int maxX, int maxY, int numSamples,
 
 	for (int s = 0; s < numSamples; s++)
 	{
-		// curand_uniform: (0, 1] 범위의 랜덤 값으로 픽셀 내 위치를 흔든다
 		double u = double(i + curand_uniform(&localRandState)) / double(maxX);
 		double v = double(j + curand_uniform(&localRandState)) / double(maxY);
 		Ray r = (*camera)->GetRay(u, v);
-		col += RayColor(r, world);
+		col += RayColor(r, world, &localRandState);
 	}
 
-	frameBuffer[pixelIndex] = col / double(numSamples);
+	// 난수 상태를 글로벌 메모리에 저장 (다음 호출을 위해)
+	randState[pixelIndex] = localRandState;
+	col = col / double(numSamples);
+
+	// 감마 보정 (gamma = 2.0): sqrt를 적용하여 어두운 영역을 밝게 보정
+	col[0] = sqrt(col[0]);
+	col[1] = sqrt(col[1]);
+	col[2] = sqrt(col[2]);
+	frameBuffer[pixelIndex] = col;
 }
 
 // GPU에서 월드 오브젝트와 카메라를 생성하는 커널
@@ -114,10 +152,13 @@ int main()
 {
 	int imageWidth = 1440;
 	int imageHeight = 720;
-	int numSamples = 100;
+	int numSamples = 30;
 
 	int blockWidth = 8;
 	int blockHeight = 8;
+
+	// GPU 스택 크기 증가 (난반사 루프에서 필요)
+	checkCudaErrors(cudaDeviceSetLimit(cudaLimitStackSize, 8192));
 
 	std::cerr << "Rendering a " << imageWidth << "x" << imageHeight
 		<< " image with " << numSamples << " samples per pixel "
