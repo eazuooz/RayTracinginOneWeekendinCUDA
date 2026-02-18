@@ -32,12 +32,10 @@ void CheckCuda(cudaError_t result, char const* const func, const char* const fil
 	}
 }
 
-// === Chapter 9: 유전체 (Dielectric) ===
+// === Chapter 10: 자유 시점 카메라 (Positionable Camera) ===
 //
-// Material::Scatter를 통해 재질별 산란 동작을 결정한다.
-// - Lambertian: 랜덤 방향으로 난반사
-// - Metal: 반사 벡터 + fuzz로 흐릿한 반사
-// - Dielectric: 스넬의 법칙으로 굴절, Schlick 근사로 반사 확률
+// lookfrom/lookat/vup으로 카메라 위치와 방향을 자유롭게 설정한다.
+// vfov(수직 시야각)와 aspect(종횡비)로 뷰포트 크기를 결정한다.
 //
 // GPU에서 재귀 대신 루프(최대 50회)로 레이를 추적한다.
 // 매 반복마다 재질의 Scatter 함수로 감쇠 색상과 새 레이를 얻는다.
@@ -120,7 +118,7 @@ __global__ void Render(
 }
 
 // GPU에서 월드 오브젝트, 재질, 카메라를 생성
-__global__ void CreateWorld(Hittable** list, Hittable** world, Camera** camera)
+__global__ void CreateWorld(Hittable** list, Hittable** world, Camera** camera, int imageWidth, int imageHeight)
 {
 	if (threadIdx.x == 0 && blockIdx.x == 0)
 	{
@@ -150,7 +148,14 @@ __global__ void CreateWorld(Hittable** list, Hittable** world, Camera** camera)
 			new Dielectric(1.5));
 
 		*world = new HittableList(list, 5);
-		*camera = new Camera();
+
+		// 자유 시점 카메라: (-2,2,1)에서 (0,0,-1)을 바라봄, vfov=20도
+		*camera = new Camera(
+			Vector3(-2.0, 2.0, 1.0),   // lookfrom
+			Vector3(0.0, 0.0, -1.0),   // lookat
+			Vector3(0.0, 1.0, 0.0),    // vup
+			20.0,                        // vfov (degrees)
+			double(imageWidth) / double(imageHeight));  // aspect ratio
 	}
 }
 
@@ -201,7 +206,7 @@ int main()
 	Camera** camera;
 	checkCudaErrors(cudaMalloc((void**)&camera, sizeof(Camera*)));
 
-	CreateWorld<<<1, 1>>>(list, world, camera);
+	CreateWorld<<<1, 1>>>(list, world, camera, imageWidth, imageHeight);
 	checkCudaErrors(cudaGetLastError());
 	checkCudaErrors(cudaDeviceSynchronize());
 
