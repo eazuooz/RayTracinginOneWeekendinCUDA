@@ -14,6 +14,7 @@
 #include "HittableList.h"
 #include "Sphere.h"
 #include "Material.h"
+#include "Metal.h"
 #include "Camera.h"
 
 // CUDA 에러 체크 매크로

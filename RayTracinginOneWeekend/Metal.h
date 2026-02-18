@@ -1,86 +1,36 @@
 #pragma once
+#ifndef METAL_H
+#define METAL_H
+
 #include "Material.h"
 
+// 금속 재질 (Metal)
+// 입사 레이를 법선 기준으로 반사하며, fuzz로 흐릿한 정도를 조절
 class Metal : public Material
 {
 public:
-    explicit Metal(const Color& albedo, double fuzz)
-        : mAlbedo(albedo)
-        , mFuzz(fuzz < 1 ? fuzz : 1)
-    {
-    }
+	__device__ Metal(const Color& albedo, double fuzz)
+		: mAlbedo(albedo)
+		, mFuzz(fuzz < 1.0 ? fuzz : 1.0)
+	{
+	}
 
-    bool Scatter(const Ray& rayIn, const HitRecord& hitRecord, Color& attenuation, Ray& scattered) const override
-    {
-        Vec3 reflected = Reflect(rayIn.Direction(), hitRecord.Normal);
-		reflected += UnitVector(reflected) + (mFuzz * RandomUnitVector());
-        scattered = Ray(hitRecord.P, reflected);
-        attenuation = mAlbedo;
-
-        return (Dot(scattered.Direction(), hitRecord.Normal) > 0);
-    }
-
-private:
-    Color mAlbedo;
-    double mFuzz;
-};
-
-class Dielectric : public Material
-{
-public:
-    static double Reflectance(double cosine, double refractionIndex)
-    {
-        // Schlick�� �ݻ��� �ٻ� ���
-        auto r0 = (1.0 - refractionIndex) / (1.0 + refractionIndex);
-        r0 = r0 * r0;
-        return r0 + (1.0 - r0) * std::pow((1.0 - cosine), 5);
-    }
-
-    explicit Dielectric(double refractionIndex)
-        : mRefractionIndex(refractionIndex)
-    {
-    }
-
-    bool Scatter(
-        const Ray& rayIn,
-        const HitRecord& hitRecord,
-        Color& attenuation,
-        Ray& scattered
-    ) const override
-    {
-        attenuation = Color(1.0, 1.0, 1.0);
-
-        const double refractionRatio =
-            hitRecord.bFrontFace ? (1.0 / mRefractionIndex) : mRefractionIndex;
-
-        const Vec3 unitDirection = UnitVector(rayIn.Direction());
-
-        const double cosTheta =
-            std::fmin(Dot(-unitDirection, hitRecord.Normal), 1.0);
-
-        const double sinTheta =
-            std::sqrt(1.0 - cosTheta * cosTheta);
-
-        const bool cannotRefract =
-            refractionRatio * sinTheta > 1.0;
-
-        Vec3 direction;
-
-        if (cannotRefract || Reflectance(cosTheta, refractionRatio) > RandomDouble())
-        {
-            direction = Reflect(unitDirection, hitRecord.Normal);
-        }
-        else
-        {
-            direction = Refract(unitDirection, hitRecord.Normal, refractionRatio);
-        }
-
-        scattered = Ray(hitRecord.P, direction);
-
-        return true;
-    }
+	__device__ bool Scatter(
+		const Ray& rayIn,
+		const HitRecord& rec,
+		Color& attenuation,
+		Ray& scattered,
+		curandState* randState) const override
+	{
+		Vector3 reflected = Reflect(UnitVector(rayIn.Direction()), rec.Normal);
+		scattered = Ray(rec.P, reflected + mFuzz * RandomInUnitSphere(randState));
+		attenuation = mAlbedo;
+		return (Dot(scattered.Direction(), rec.Normal) > 0.0);
+	}
 
 private:
-    // Refraction index (IOR). For air/vacuum -> material, typical glass is ~1.5.
-    double mRefractionIndex = 1.0;
+	Color mAlbedo;
+	double mFuzz;
 };
+
+#endif
