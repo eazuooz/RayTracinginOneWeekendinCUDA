@@ -32,10 +32,10 @@ void CheckCuda(cudaError_t result, char const* const func, const char* const fil
 	}
 }
 
-// === Chapter 10: 자유 시점 카메라 (Positionable Camera) ===
+// === Chapter 11: 피사계 심도 (Defocus Blur) ===
 //
-// lookfrom/lookat/vup으로 카메라 위치와 방향을 자유롭게 설정한다.
-// vfov(수직 시야각)와 aspect(종횡비)로 뷰포트 크기를 결정한다.
+// 카메라에 aperture(조리개)와 focusDist(초점 거리)를 추가하여
+// 초점 평면의 물체만 선명하고, 나머지는 흐릿하게 렌더링한다.
 //
 // GPU에서 재귀 대신 루프(최대 50회)로 레이를 추적한다.
 // 매 반복마다 재질의 Scatter 함수로 감쇠 색상과 새 레이를 얻는다.
@@ -103,7 +103,7 @@ __global__ void Render(
 	{
 		double u = double(i + curand_uniform(&localRandState)) / double(maxX);
 		double v = double(j + curand_uniform(&localRandState)) / double(maxY);
-		Ray r = (*camera)->GetRay(u, v);
+		Ray r = (*camera)->GetRay(u, v, &localRandState);
 		col += RayColor(r, world, &localRandState);
 	}
 
@@ -149,13 +149,20 @@ __global__ void CreateWorld(Hittable** list, Hittable** world, Camera** camera, 
 
 		*world = new HittableList(list, 5);
 
-		// 자유 시점 카메라: (-2,2,1)에서 (0,0,-1)을 바라봄, vfov=20도
+		// 피사계 심도 카메라: (3,3,2)에서 (0,0,-1)을 바라봄
+		Vector3 lookfrom(3.0, 3.0, 2.0);
+		Vector3 lookat(0.0, 0.0, -1.0);
+		double distToFocus = (lookfrom - lookat).Length();
+		double aperture = 2.0;
+
 		*camera = new Camera(
-			Vector3(-2.0, 2.0, 1.0),   // lookfrom
-			Vector3(0.0, 0.0, -1.0),   // lookat
-			Vector3(0.0, 1.0, 0.0),    // vup
+			lookfrom,                    // lookfrom
+			lookat,                      // lookat
+			Vector3(0.0, 1.0, 0.0),     // vup
 			20.0,                        // vfov (degrees)
-			double(imageWidth) / double(imageHeight));  // aspect ratio
+			double(imageWidth) / double(imageHeight),  // aspect ratio
+			aperture,                    // 조리개 크기
+			distToFocus);               // 초점 거리
 	}
 }
 
