@@ -35,7 +35,8 @@ public:
             {
                 hitRecord.T = temp;
                 hitRecord.P = ray.At(hitRecord.T);
-                hitRecord.Normal = (hitRecord.P - mCenter) / mRadius;
+                Vector3 outwardNormal = (hitRecord.P - mCenter) / mRadius;
+                hitRecord.SetFaceNormal(ray, outwardNormal);
                 hitRecord.MaterialPtr = mMaterial;
                 return true;
             }
@@ -45,7 +46,8 @@ public:
             {
                 hitRecord.T = temp;
                 hitRecord.P = ray.At(hitRecord.T);
-                hitRecord.Normal = (hitRecord.P - mCenter) / mRadius;
+                Vector3 outwardNormal = (hitRecord.P - mCenter) / mRadius;
+                hitRecord.SetFaceNormal(ray, outwardNormal);
                 hitRecord.MaterialPtr = mMaterial;
                 return true;
             }

@@ -15,6 +15,7 @@
 #include "Sphere.h"
 #include "Material.h"
 #include "Metal.h"
+#include "Dielectric.h"
 #include "Camera.h"
 
 // CUDA 에러 체크 매크로
@@ -31,11 +32,12 @@ void CheckCuda(cudaError_t result, char const* const func, const char* const fil
 	}
 }
 
-// === Chapter 8: 금속 재질 (Metal) ===
+// === Chapter 9: 유전체 (Dielectric) ===
 //
 // Material::Scatter를 통해 재질별 산란 동작을 결정한다.
 // - Lambertian: 랜덤 방향으로 난반사
 // - Metal: 반사 벡터 + fuzz로 흐릿한 반사
+// - Dielectric: 스넬의 법칙으로 굴절, Schlick 근사로 반사 확률
 //
 // GPU에서 재귀 대신 루프(최대 50회)로 레이를 추적한다.
 // 매 반복마다 재질의 Scatter 함수로 감쇠 색상과 새 레이를 얻는다.
@@ -127,22 +129,27 @@ __global__ void CreateWorld(Hittable** list, Hittable** world, Camera** camera)
 			Vector3(0.0, -100.5, -1.0), 100.0,
 			new Lambertian(Color(0.8, 0.8, 0.0)));
 
-		// 중앙: 난반사 구체
+		// 중앙: 파란 계열 난반사 구체
 		list[1] = new Sphere(
 			Vector3(0.0, 0.0, -1.0), 0.5,
-			new Lambertian(Color(0.7, 0.3, 0.3)));
-
-		// 왼쪽: 금속 구체 (흐릿한 반사)
-		list[2] = new Sphere(
-			Vector3(-1.0, 0.0, -1.0), 0.5,
-			new Metal(Color(0.8, 0.8, 0.8), 0.3));
+			new Lambertian(Color(0.1, 0.2, 0.5)));
 
 		// 오른쪽: 금속 구체 (선명한 반사)
-		list[3] = new Sphere(
+		list[2] = new Sphere(
 			Vector3(1.0, 0.0, -1.0), 0.5,
 			new Metal(Color(0.8, 0.6, 0.2), 0.0));
 
-		*world = new HittableList(list, 4);
+		// 왼쪽: 유리 구체 (굴절률 1.5)
+		list[3] = new Sphere(
+			Vector3(-1.0, 0.0, -1.0), 0.5,
+			new Dielectric(1.5));
+
+		// 왼쪽 내부: 음수 반지름으로 속이 빈 유리 구체 (버블 효과)
+		list[4] = new Sphere(
+			Vector3(-1.0, 0.0, -1.0), -0.45,
+			new Dielectric(1.5));
+
+		*world = new HittableList(list, 5);
 		*camera = new Camera();
 	}
 }
@@ -152,7 +159,7 @@ __global__ void FreeWorld(Hittable** list, Hittable** world, Camera** camera)
 {
 	if (threadIdx.x == 0 && blockIdx.x == 0)
 	{
-		for (int i = 0; i < 4; i++)
+		for (int i = 0; i < 5; i++)
 		{
 			delete list[i];
 		}
@@ -186,9 +193,9 @@ int main()
 	curandState* randState;
 	checkCudaErrors(cudaMalloc((void**)&randState, numPixels * sizeof(curandState)));
 
-	// 월드 + 카메라를 GPU 메모리에 생성 (구체 4개)
+	// 월드 + 카메라를 GPU 메모리에 생성 (구체 5개)
 	Hittable** list;
-	checkCudaErrors(cudaMalloc((void**)&list, 4 * sizeof(Hittable*)));
+	checkCudaErrors(cudaMalloc((void**)&list, 5 * sizeof(Hittable*)));
 	Hittable** world;
 	checkCudaErrors(cudaMalloc((void**)&world, sizeof(Hittable*)));
 	Camera** camera;
