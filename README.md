@@ -21,11 +21,11 @@
 
 ### 🚀 Phase 2: CUDA Porting & Core Optimization
 > CPU 코드를 CUDA 커널로 변환하고 GPU 아키텍처에 맞게 최적화
-- [ ] **CUDA Kernel Launch**: 픽셀 단위 병렬 처리 구현
-- [ ] **Iterative Rendering**: 재귀(Recursion) 제거 및 반복문 변환 (Stack Overflow 방지)
-- [ ] **Fast RNG**: cuRAND 대체 및 고속 해시 기반 난수 생성기(PCG/XORShift) 적용
-- [ ] **Memory Management**: Unified Memory 적용 및 데이터 구조체(SoA 등) 최적화
-- [ ] **Float Precision**: 성능 향상을 위한 Float 자료형 전환
+- [x] **CUDA Kernel Launch**: 픽셀 단위 병렬 처리 구현
+- [x] **Iterative Rendering**: 재귀(Recursion) 제거 및 반복문 변환 (Stack Overflow 방지)
+- [x] **Fast RNG**: cuRAND 대체 및 고속 해시 기반 난수 생성기(PCG/XORShift) 적용
+- [x] **Memory Management**: Unified Memory 적용 및 데이터 구조체(SoA 등) 최적화
+- [x] **Float Precision**: 성능 향상을 위한 Float 자료형 전환
 
 ### 📗 Phase 3: The Next Week (on CUDA)
 > GPU 기반에서의 렌더링 품질 향상 및 가속 구조 구현
