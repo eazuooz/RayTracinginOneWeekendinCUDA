@@ -49,8 +49,14 @@ public:
         Ray& scattered,
         curandState* randState) const override
     {
-        Vector3 target = rec.P + rec.Normal + RandomInUnitSphere(randState);
-        scattered = Ray(rec.P, target - rec.P);
+        Vector3 scatterDirection = rec.Normal + RandomInUnitSphere(randState);
+
+        // 산란 방향이 법선과 거의 반대여서 영벡터에 가까워지는 경우 방지
+        if (scatterDirection.NearZero())
+            scatterDirection = rec.Normal;
+
+        // 산란 레이는 입력 레이의 time을 그대로 물려받는다
+        scattered = Ray(rec.P, scatterDirection, rayIn.Time());
         attenuation = mAlbedo;
         return true;
     }

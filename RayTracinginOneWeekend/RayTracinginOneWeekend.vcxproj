@@ -60,7 +60,7 @@
     </CudaCompile>
     <PostBuildEvent>
       <Command>"$(OutDir)$(TargetName)$(TargetExt)"
-copy /Y "$(OutDir)output.ppm" "$(SolutionDir)output.ppm"</Command>
+copy /Y "$(ProjectDir)output.ppm" "$(SolutionDir)output.ppm"</Command>
       <Message>Running ray tracer and copying output.ppm to solution directory...</Message>
     </PostBuildEvent>
   </ItemDefinitionGroup>
@@ -85,7 +85,7 @@ copy /Y "$(OutDir)output.ppm" "$(SolutionDir)output.ppm"</Command>
     </CudaCompile>
     <PostBuildEvent>
       <Command>"$(OutDir)$(TargetName)$(TargetExt)"
-copy /Y "$(OutDir)output.ppm" "$(SolutionDir)output.ppm"</Command>
+copy /Y "$(ProjectDir)output.ppm" "$(SolutionDir)output.ppm"</Command>
       <Message>Running ray tracer and copying output.ppm to solution directory...</Message>
     </PostBuildEvent>
   </ItemDefinitionGroup>

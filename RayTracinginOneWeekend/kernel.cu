@@ -13,6 +13,7 @@
 #include "Hittable.h"
 #include "HittableList.h"
 #include "Sphere.h"
+#include "MovingSphere.h"
 #include "Material.h"
 #include "Metal.h"
 #include "Dielectric.h"
@@ -32,12 +33,15 @@ void CheckCuda(cudaError_t result, char const* const func, const char* const fil
 	}
 }
 
-// === Chapter 12: 최종 렌더 (Final Render) ===
+// === Chapter 12: 최종 렌더 (Final Render) + The Next Week: 모션 블러 ===
 //
 // "Ray Tracing in One Weekend"의 표지 장면을 GPU에서 렌더링한다.
 // 22×22 격자에 랜덤 소형 구체(Lambertian/Metal/Dielectric)를 배치하고,
 // 중앙에 유리/난반사/금속 대형 구체 3개를 놓는다.
 // 총 구체 수: 22*22 + 1(바닥) + 3(대형) = 최대 488개
+//
+// 모션 블러: Lambertian 소형 구체들이 MovingSphere로 교체되어
+// 셔터 개방 시간(time0=0, time1=1) 동안 위로 튀어오르는 운동을 한다.
 //
 // GPU에서 재귀 대신 루프(최대 50회)로 레이를 추적한다.
 // 매 반복마다 재질의 Scatter 함수로 감쇠 색상과 새 레이를 얻는다.
@@ -136,7 +140,7 @@ __global__ void Render(
 // 구체 배치 시 (4, 0.2, 0) 근처는 대형 구체와 겹치지 않도록 건너뛴다.
 __global__ void CreateWorld(
 	Hittable** list, Hittable** world, Camera** camera,
-	int imageWidth, int imageHeight, curandState* randState)
+	int imageWidth, int imageHeight, curandState* randState, int* outCount)
 {
 	if (threadIdx.x == 0 && blockIdx.x == 0)
 	{
@@ -154,13 +158,20 @@ __global__ void CreateWorld(
 			for (int b = -11; b < 11; b++)
 			{
 				double chooseMat = RND;
-				Vector3 center(a + RND, 0.2, b + RND);
+				Vector3 center(a + 0.9 * RND, 0.2, b + 0.9 * RND);
+
+				// 대형 구체(4, 0.2, 0)와 겹치는 위치는 건너뜀
+				Vector3 diff = center - Vector3(4.0, 0.2, 0.0);
+				if (diff.Length() <= 0.9)
+					continue;
 
 				if (chooseMat < 0.8)
 				{
-					// 80%: Lambertian (랜덤 색상의 난반사)
-					list[i++] = new Sphere(
-						center, 0.2,
+					// 80%: Lambertian (랜덤 색상의 난반사) - 모션 블러 적용
+					// 셔터 개방 구간(0~1) 동안 위쪽으로 랜덤하게 튀어오르는 MovingSphere
+					Vector3 center2 = center + Vector3(0.0, 0.5 * RND, 0.0);
+					list[i++] = new MovingSphere(
+						center, center2, 0.0, 1.0, 0.2,
 						new Lambertian(Color(RND * RND, RND * RND, RND * RND)));
 				}
 				else if (chooseMat < 0.95)
@@ -186,9 +197,12 @@ __global__ void CreateWorld(
 		list[i++] = new Sphere(Vector3(4.0, 1.0, 0.0), 1.0, new Metal(Color(0.7, 0.6, 0.5), 0.0));
 
 		*randState = localRandState;
-		*world = new HittableList(list, 22 * 22 + 1 + 3);
+		// continue로 건너뛴 구체가 있으므로 고정값 대신 실제 배치된 수 i를 사용
+		*world = new HittableList(list, i);
+		*outCount = i;  // host에서 FreeWorld 호출 시 실제 count 전달용
 
-		// 카메라: (13,2,3)에서 원점을 바라봄, 얕은 피사계 심도
+		// 카메라: (13,2,3)에서 원점을 바라봄, 얕은 피사계 심도 + 모션 블러
+		// time0=0, time1=1: 셔터 개방 구간. 각 레이가 이 구간에서 랜덤 시각을 가진다.
 		Vector3 lookfrom(13.0, 2.0, 3.0);
 		Vector3 lookat(0.0, 0.0, 0.0);
 		double distToFocus = 10.0;
@@ -201,7 +215,9 @@ __global__ void CreateWorld(
 			30.0,
 			double(imageWidth) / double(imageHeight),
 			aperture,
-			distToFocus);
+			distToFocus,
+			0.0,   // 셔터 개방 시각
+			1.0);  // 셔터 닫힘 시각
 	}
 }
 
@@ -230,8 +246,9 @@ int main()
 	int blockWidth = 8;
 	int blockHeight = 8;
 
-	// GPU 스택 크기 증가 (가상 함수 + 루프에서 필요)
-	checkCudaErrors(cudaDeviceSetLimit(cudaLimitStackSize, 8192));
+	// GPU 스택 크기 증가
+	// MovingSphere 추가로 가상함수 깊이가 늘어 스택 소비 증가 → 32768로 확장
+	checkCudaErrors(cudaDeviceSetLimit(cudaLimitStackSize, 32768));
 
 	std::cerr << "Rendering a " << imageWidth << "x" << imageHeight
 		<< " image with " << numSamples << " samples per pixel "
@@ -256,18 +273,25 @@ int main()
 	checkCudaErrors(cudaDeviceSynchronize());
 
 	// 월드 + 카메라를 GPU 메모리에 생성
-	// 최대 구체 수: 22*22(소형) + 1(바닥) + 3(대형) = 488
-	int numHittables = 22 * 22 + 1 + 3;
+	// 최대 구체 수: 22*22(소형) + 1(바닥) + 3(대형) = 488 (실제는 continue로 일부 제외)
+	int maxHittables = 22 * 22 + 1 + 3;
 	Hittable** list;
-	checkCudaErrors(cudaMalloc((void**)&list, numHittables * sizeof(Hittable*)));
+	checkCudaErrors(cudaMalloc((void**)&list, maxHittables * sizeof(Hittable*)));
 	Hittable** world;
 	checkCudaErrors(cudaMalloc((void**)&world, sizeof(Hittable*)));
 	Camera** camera;
 	checkCudaErrors(cudaMalloc((void**)&camera, sizeof(Camera*)));
 
-	CreateWorld<<<1, 1>>>(list, world, camera, imageWidth, imageHeight, randState2);
+	// 실제 배치된 구체 수를 GPU→CPU로 공유하기 위한 Managed 메모리
+	int* d_numHittables;
+	checkCudaErrors(cudaMallocManaged((void**)&d_numHittables, sizeof(int)));
+	*d_numHittables = 0;
+
+	CreateWorld<<<1, 1>>>(list, world, camera, imageWidth, imageHeight, randState2, d_numHittables);
 	checkCudaErrors(cudaGetLastError());
 	checkCudaErrors(cudaDeviceSynchronize());
+
+	int numHittables = *d_numHittables;  // CreateWorld가 기록한 실제 배치 수
 
 	clock_t start, stop;
 	start = clock();
@@ -323,6 +347,7 @@ int main()
 	checkCudaErrors(cudaFree(list));
 	checkCudaErrors(cudaFree(world));
 	checkCudaErrors(cudaFree(camera));
+	checkCudaErrors(cudaFree(d_numHittables));
 	checkCudaErrors(cudaFree(frameBuffer));
 
 	return 0;

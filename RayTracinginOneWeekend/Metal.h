@@ -23,7 +23,8 @@ public:
 		curandState* randState) const override
 	{
 		Vector3 reflected = Reflect(UnitVector(rayIn.Direction()), rec.Normal);
-		scattered = Ray(rec.P, reflected + mFuzz * RandomInUnitSphere(randState));
+		// 산란 레이는 입력 레이의 time을 그대로 물려받는다
+		scattered = Ray(rec.P, reflected + mFuzz * RandomInUnitSphere(randState), rayIn.Time());
 		attenuation = mAlbedo;
 		return (Dot(scattered.Direction(), rec.Normal) > 0.0);
 	}

@@ -19,19 +19,20 @@ __device__ inline Vector3 RandomInUnitDisk(curandState* randState)
 }
 
 // === Chapter 11: 피사계 심도 (Defocus Blur / Depth of Field) ===
+// === The Next Week: 모션 블러 (Motion Blur) ===
 //
-// 실제 카메라의 렌즈를 시뮬레이션한다.
-// aperture(조리개): 클수록 배경 흐림이 강해짐
+// 실제 카메라의 셔터 개방 시간을 시뮬레이션한다.
+// time0~time1 구간 동안 셔터가 열려 있으며,
+// 각 레이는 그 구간 내 랜덤한 시각을 가진다.
+// MovingSphere는 레이의 time을 읽어 그 순간의 위치를 계산한다.
+//
+// aperture(조리개): 클수록 피사계 심도 흐림이 강해짐
 // focusDist(초점 거리): 이 거리의 물체만 선명하게 보임
-//
-// 레이 원점을 렌즈 원반 위의 랜덤 점으로 오프셋하여
-// 초점 평면 위의 물체만 선명하고 나머지는 흐릿하게 만든다.
 class Camera
 {
 public:
-	// 피사계 심도 지원 생성자
-	// aperture: 조리개 크기 (0이면 핀홀 카메라 = 모든 것이 선명)
-	// focusDist: 초점 거리 (이 거리의 물체가 선명)
+	// 피사계 심도 + 모션 블러 지원 생성자
+	// time0, time1: 셔터 개방 시작/종료 시각 (기본값 0.0)
 	__device__ Camera(
 		Point3 lookfrom,
 		Point3 lookat,
@@ -39,8 +40,12 @@ public:
 		double vfov,
 		double aspect,
 		double aperture,
-		double focusDist)
+		double focusDist,
+		double time0 = 0.0,
+		double time1 = 0.0)
 	{
+		mTime0 = time0;
+		mTime1 = time1;
 		mLensRadius = aperture / 2.0;
 
 		// vfov를 라디안으로 변환하여 뷰포트 높이 계산
@@ -63,15 +68,18 @@ public:
 		mVertical = 2.0 * halfHeight * focusDist * mV;
 	}
 
-	// 피사계 심도가 적용된 레이 생성
-	// 렌즈 위의 랜덤 점에서 초점 평면의 목표 지점으로 레이를 쏜다
+	// 피사계 심도 + 모션 블러가 적용된 레이 생성
+	// 렌즈 위의 랜덤 점에서 초점 평면의 목표 지점으로 레이를 쏘고,
+	// [time0, time1] 구간에서 랜덤한 발사 시각을 레이에 부여한다.
 	__device__ Ray GetRay(double s, double t, curandState* randState) const
 	{
 		Vector3 rd = mLensRadius * RandomInUnitDisk(randState);
 		Vector3 offset = mU * rd.X() + mV * rd.Y();
+		double time = mTime0 + curand_uniform(randState) * (mTime1 - mTime0);
 		return Ray(
 			mOrigin + offset,
-			mLowerLeftCorner + s * mHorizontal + t * mVertical - mOrigin - offset);
+			mLowerLeftCorner + s * mHorizontal + t * mVertical - mOrigin - offset,
+			time);
 	}
 
 private:
@@ -81,6 +89,8 @@ private:
 	Vector3 mVertical;
 	Vector3 mU, mV, mW;
 	double mLensRadius;
+	double mTime0;  // 셔터 개방 시각
+	double mTime1;  // 셔터 닫힘 시각
 };
 
 #endif

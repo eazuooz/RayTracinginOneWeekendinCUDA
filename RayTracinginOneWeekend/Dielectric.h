@@ -49,7 +49,8 @@ public:
 			direction = Refract(unitDirection, rec.Normal, refractionRatio);
 		}
 
-		scattered = Ray(rec.P, direction);
+		// 산란 레이는 입력 레이의 time을 그대로 물려받는다
+		scattered = Ray(rec.P, direction, rayIn.Time());
 		return true;
 	}
 
