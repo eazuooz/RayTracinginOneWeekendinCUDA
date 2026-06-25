@@ -93,6 +93,8 @@ copy /Y "$(ProjectDir)output.ppm" "$(SolutionDir)output.ppm"</Command>
     <CudaCompile Include="kernel.cu" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="AABB.h" />
+    <ClInclude Include="BvhNode.h" />
     <ClInclude Include="Camera.h" />
     <ClInclude Include="Color.h" />
     <ClInclude Include="Hittable.h" />

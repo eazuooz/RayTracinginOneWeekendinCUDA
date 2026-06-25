@@ -27,6 +27,12 @@ public:
         , mRadius(radius)
         , mMaterial(material)
     {
+        // 운동 구간 전체를 감싸려면 time0 위치의 상자와 time1 위치의 상자를
+        // 모두 포함하는 상자가 필요하다.
+        Vector3 rvec(radius, radius, radius);
+        Aabb box0(center0 - rvec, center0 + rvec);
+        Aabb box1(center1 - rvec, center1 + rvec);
+        mBBox = Aabb(box0, box1);
     }
 
     // 레이 발사 시각에 따라 보간된 구체 중심 위치를 반환
@@ -79,6 +85,8 @@ public:
         return false;
     }
 
+    __device__ Aabb BoundingBox() const override { return mBBox; }
+
 private:
     Point3 mCenter0;   // 시각 time0에서의 중심
     Point3 mCenter1;   // 시각 time1에서의 중심
@@ -86,6 +94,7 @@ private:
     double mTime1;     // 이동 종료 시각
     double mRadius;
     Material* mMaterial;
+    Aabb mBBox;        // 운동 구간 전체를 감싸는 경계 상자
 };
 
 #endif

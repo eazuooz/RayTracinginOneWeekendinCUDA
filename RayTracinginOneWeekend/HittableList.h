@@ -11,7 +11,12 @@ class HittableList : public Hittable
 public:
     __device__ HittableList() {}
     __device__ HittableList(Hittable** list, int count)
-        : mList(list), mCount(count) {}
+        : mList(list), mCount(count)
+    {
+        // 자식들의 경계 상자를 합쳐 리스트 전체의 경계 상자를 구한다
+        for (int i = 0; i < count; i++)
+            mBBox = Aabb(mBBox, list[i]->BoundingBox());
+    }
 
     __device__ bool Hit(const Ray& ray, double tMin, double tMax, HitRecord& hitRecord) const override
     {
@@ -32,9 +37,12 @@ public:
         return bHitAnything;
     }
 
+    __device__ Aabb BoundingBox() const override { return mBBox; }
+
 private:
     Hittable** mList;
     int mCount;
+    Aabb mBBox;
 };
 
 #endif

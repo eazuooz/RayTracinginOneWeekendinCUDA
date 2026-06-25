@@ -3,6 +3,7 @@
 #define HITTABLE_H
 
 #include "Ray.h"
+#include "AABB.h"
 
 class Material;
 
@@ -31,6 +32,16 @@ public:
         double tMin,
         double tMax,
         HitRecord& hitRecord) const = 0;
+
+    // 이 객체를 감싸는 AABB를 반환한다.
+    // BVH가 객체를 계층적으로 묶으려면 모든 Hittable이 자신의 경계 상자를
+    // 알려줄 수 있어야 한다. 움직이는 객체는 운동 구간 전체(time0~time1)를
+    // 포함하는 상자를 반환해야 한다.
+    __device__ virtual Aabb BoundingBox() const = 0;
+
+    // BVH 내부 노드 여부. BvhNode가 반복(iterative) 순회 중 자식이 내부 노드인지
+    // 잎(primitive)인지 구분하는 데 쓴다. 기본값은 false(잎/일반 오브젝트).
+    __device__ virtual bool IsBvhNode() const { return false; }
 };
 
 #endif

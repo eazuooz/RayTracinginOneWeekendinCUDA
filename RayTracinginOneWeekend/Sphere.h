@@ -14,6 +14,9 @@ public:
         , mRadius(radius)
         , mMaterial(material)
     {
+        // 반지름 벡터로 중심 ± r 두 극점을 잡아 경계 상자를 만든다
+        Vector3 rvec(radius, radius, radius);
+        mBBox = Aabb(center - rvec, center + rvec);
     }
 
     __device__ bool Hit(
@@ -56,10 +59,13 @@ public:
         return false;
     }
 
+    __device__ Aabb BoundingBox() const override { return mBBox; }
+
 private:
     Point3 mCenter;
     double mRadius;
     Material* mMaterial;
+    Aabb mBBox;
 };
 
 #endif

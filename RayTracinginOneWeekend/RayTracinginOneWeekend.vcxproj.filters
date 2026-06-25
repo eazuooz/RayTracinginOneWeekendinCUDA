@@ -42,6 +42,12 @@
     <ClInclude Include="HittableList.h">
       <Filter>Collision</Filter>
     </ClInclude>
+    <ClInclude Include="AABB.h">
+      <Filter>Collision</Filter>
+    </ClInclude>
+    <ClInclude Include="BvhNode.h">
+      <Filter>Collision</Filter>
+    </ClInclude>
     <ClInclude Include="Interval.h">
       <Filter>Common</Filter>
     </ClInclude>

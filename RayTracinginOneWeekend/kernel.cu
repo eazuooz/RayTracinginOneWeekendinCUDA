@@ -12,6 +12,7 @@
 #include "Ray.h"
 #include "Hittable.h"
 #include "HittableList.h"
+#include "BvhNode.h"
 #include "Sphere.h"
 #include "MovingSphere.h"
 #include "Material.h"
@@ -140,7 +141,8 @@ __global__ void Render(
 // 구체 배치 시 (4, 0.2, 0) 근처는 대형 구체와 겹치지 않도록 건너뛴다.
 __global__ void CreateWorld(
 	Hittable** list, Hittable** world, Camera** camera,
-	int imageWidth, int imageHeight, curandState* randState, int* outCount)
+	int imageWidth, int imageHeight, curandState* randState, int* outCount,
+	Hittable** bvhNodes, int* outNodeCount)
 {
 	if (threadIdx.x == 0 && blockIdx.x == 0)
 	{
@@ -198,8 +200,18 @@ __global__ void CreateWorld(
 
 		*randState = localRandState;
 		// continue로 건너뛴 구체가 있으므로 고정값 대신 실제 배치된 수 i를 사용
-		*world = new HittableList(list, i);
 		*outCount = i;  // host에서 FreeWorld 호출 시 실제 count 전달용
+
+		// === BVH 빌드 ===
+		// 기존에는 *world = HittableList(선형 탐색)였으나,
+		// 이제 list[0..i)를 BVH로 묶어 레이-객체 교차를 로그 시간에 가깝게 만든다.
+		// 빌드 과정에서 list 배열은 분할 축 기준으로 제자리 정렬되지만,
+		// 모든 잎 포인터는 그대로 보존되므로 FreeWorld의 list[] 해제에는 영향 없다.
+		int nodeCount = 0;
+		BvhNode* root = new BvhNode(list, 0, i, bvhNodes, &nodeCount);
+		bvhNodes[nodeCount++] = root;  // 루트도 해제 레지스트리에 등록
+		*outNodeCount = nodeCount;
+		*world = root;
 
 		// 카메라: (13,2,3)에서 원점을 바라봄, 얕은 피사계 심도 + 모션 블러
 		// time0=0, time1=1: 셔터 개방 구간. 각 레이가 이 구간에서 랜덤 시각을 가진다.
@@ -224,15 +236,24 @@ __global__ void CreateWorld(
 #undef RND
 
 // GPU 오브젝트 해제 커널
-__global__ void FreeWorld(Hittable** list, int numHittables, Hittable** world, Camera** camera)
+__global__ void FreeWorld(
+	Hittable** list, int numHittables,
+	Hittable** bvhNodes, int numNodes,
+	Hittable** world, Camera** camera)
 {
 	if (threadIdx.x == 0 && blockIdx.x == 0)
 	{
+		// 잎(primitive)들을 한 번씩 해제
 		for (int i = 0; i < numHittables; i++)
 		{
 			delete list[i];
 		}
-		delete *world;
+		// 모든 BvhNode를 한 번씩 해제 (*world == 루트 노드도 이 배열에 포함되어
+		// 있으므로 *world를 따로 delete하지 않는다 → 더블 프리 방지)
+		for (int i = 0; i < numNodes; i++)
+		{
+			delete bvhNodes[i];
+		}
 		delete *camera;
 	}
 }
@@ -247,7 +268,9 @@ int main()
 	int blockHeight = 8;
 
 	// GPU 스택 크기 증가
-	// MovingSphere 추가로 가상함수 깊이가 늘어 스택 소비 증가 → 32768로 확장
+	// MovingSphere 추가로 가상함수 깊이가 늘어 스택 소비 증가 → 32768로 확장.
+	// BVH 순회는 재귀 대신 명시적 스택(BvhNode::Hit)을 쓰므로 추가 스택은
+	// 필요 없다(재귀로 두면 이 한도로도 일부 스레드에서 스택이 넘쳤다).
 	checkCudaErrors(cudaDeviceSetLimit(cudaLimitStackSize, 32768));
 
 	std::cerr << "Rendering a " << imageWidth << "x" << imageHeight
@@ -282,16 +305,27 @@ int main()
 	Camera** camera;
 	checkCudaErrors(cudaMalloc((void**)&camera, sizeof(Camera*)));
 
+	// BVH 노드 레지스트리: n개 잎에 대한 BVH 내부 노드 수는 최대 2n 미만이므로
+	// 넉넉하게 2*maxHittables 크기로 잡는다 (해제 시 이 배열을 순회).
+	Hittable** bvhNodes;
+	checkCudaErrors(cudaMalloc((void**)&bvhNodes, 2 * maxHittables * sizeof(Hittable*)));
+
 	// 실제 배치된 구체 수를 GPU→CPU로 공유하기 위한 Managed 메모리
 	int* d_numHittables;
 	checkCudaErrors(cudaMallocManaged((void**)&d_numHittables, sizeof(int)));
 	*d_numHittables = 0;
 
-	CreateWorld<<<1, 1>>>(list, world, camera, imageWidth, imageHeight, randState2, d_numHittables);
+	// 실제 생성된 BVH 노드 수를 GPU→CPU로 공유 (FreeWorld에서 사용)
+	int* d_numNodes;
+	checkCudaErrors(cudaMallocManaged((void**)&d_numNodes, sizeof(int)));
+	*d_numNodes = 0;
+
+	CreateWorld<<<1, 1>>>(list, world, camera, imageWidth, imageHeight, randState2, d_numHittables, bvhNodes, d_numNodes);
 	checkCudaErrors(cudaGetLastError());
 	checkCudaErrors(cudaDeviceSynchronize());
 
 	int numHittables = *d_numHittables;  // CreateWorld가 기록한 실제 배치 수
+	int numNodes = *d_numNodes;          // CreateWorld가 생성한 BVH 노드 수
 
 	clock_t start, stop;
 	start = clock();
@@ -338,16 +372,18 @@ int main()
 	std::cerr << "\nDone. Saved to output.ppm\n";
 
 	// GPU 메모리 해제
-	FreeWorld<<<1, 1>>>(list, numHittables, world, camera);
+	FreeWorld<<<1, 1>>>(list, numHittables, bvhNodes, numNodes, world, camera);
 	checkCudaErrors(cudaGetLastError());
 	checkCudaErrors(cudaDeviceSynchronize());
 
 	checkCudaErrors(cudaFree(randState));
 	checkCudaErrors(cudaFree(randState2));
 	checkCudaErrors(cudaFree(list));
+	checkCudaErrors(cudaFree(bvhNodes));
 	checkCudaErrors(cudaFree(world));
 	checkCudaErrors(cudaFree(camera));
 	checkCudaErrors(cudaFree(d_numHittables));
+	checkCudaErrors(cudaFree(d_numNodes));
 	checkCudaErrors(cudaFree(frameBuffer));
 
 	return 0;
