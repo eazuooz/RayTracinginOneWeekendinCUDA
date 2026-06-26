@@ -24,7 +24,11 @@
       "Bash(file earthmap.jpg)",
       "Bash(git log *)",
       "PowerShell($sln = \"D:\\\\Github\\\\RayTracinginOneWeekendinCUDA\\\\RayTracinginOneWeekendinCUDA.sln\"; $vcvars = \"C:\\\\Program Files\\\\Microsoft Visual Studio\\\\18\\\\Community\\\\VC\\\\Auxiliary\\\\Build\\\\vcvars64.bat\"; $cmd = \"call `\"$vcvars`\" && msbuild `\"$sln`\" /t:Build /p:Configuration=Debug /p:Platform=x64 /m /nologo /v:minimal\"; cmd /c $cmd 2>&1 | Select-Object -Last 50; Write-Output \"=== exit: $LASTEXITCODE ===\")",
-      "Bash(curl -s --max-time 20 \"https://raytracing.github.io/books/RayTracingTheNextWeek.html\")"
+      "Bash(curl -s --max-time 20 \"https://raytracing.github.io/books/RayTracingTheNextWeek.html\")",
+      "PowerShell($sln = \"D:\\\\Github\\\\RayTracinginOneWeekendinCUDA\\\\RayTracinginOneWeekendinCUDA.sln\"; $vcvars = \"C:\\\\Program Files\\\\Microsoft Visual Studio\\\\2022\\\\Community\\\\VC\\\\Auxiliary\\\\Build\\\\vcvars64.bat\"; $cmd = \"call `\"$vcvars`\" && msbuild `\"$sln`\" /t:Rebuild /p:Configuration=Debug /p:Platform=x64 /m /nologo /v:minimal /p:PostBuildEventUseInBuild=false\"; cmd /c $cmd 2>&1 | Select-Object -Last 40; Write-Output \"=== exit: $LASTEXITCODE ===\")",
+      "PowerShell(Push-Location *)",
+      "Bash(cd \"C:/Users/1/.claude/projects/D--Github-RayTracinginOneWeekendinCUDA/memory\")",
+      "Bash(cat MEMORY.md)"
     ]
   }
 }

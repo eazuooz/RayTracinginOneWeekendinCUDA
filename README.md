@@ -29,10 +29,10 @@
 
 ### 📗 Phase 3: The Next Week (on CUDA)
 > GPU 기반에서의 렌더링 품질 향상 및 가속 구조 구현
-- [ ] **Motion Blur**: 시간 차원에 따른 모션 블러 구현
-- [ ] **GPU BVH**: GPU 메모리에 최적화된 BVH(Bounding Volume Hierarchies) 구축 및 순회
-- [ ] **Texture Mapping**: 텍스처 메모리 및 서피스 객체 활용
-- [ ] **Volume Rendering**: Perlin Noise 및 볼륨 렌더링 구현
+- [x] **Motion Blur**: 시간 차원에 따른 모션 블러 구현
+- [x] **GPU BVH**: GPU 메모리에 최적화된 BVH(Bounding Volume Hierarchies) 구축 및 순회
+- [x] **Texture Mapping**: 절차적(체커)·이미지(stb)·펄린 노이즈 텍스처 구현
+- [ ] **Volume Rendering**: 볼륨(연기/안개) 렌더링 구현 *(Perlin Noise 완료)*
 
 ### 📙 Phase 4: The Rest of Your Life (on CUDA)
 > 몬테카를로 적분 및 중요도 샘플링을 통한 수렴 속도 개선

@@ -145,6 +145,7 @@ __global__ void Render(
 //   0: bouncing_spheres  — 최종 랜덤 구 장면(바닥을 "체커 텍스처"로 교체)
 //   1: checkered_spheres — 위아래로 놓인 체커 구 2개
 //   2: earth             — 이미지 텍스처(지구 맵)를 입힌 구 1개
+//   3: perlin_spheres    — 펄린 노이즈(대리석) 텍스처 구 2개
 //
 // earthData/earthW/earthH: 호스트가 stb_image로 로드해 디바이스에 올린
 // RGB 바이트 버퍼와 크기(scene 2에서만 사용). 로드 실패 시 nullptr → 청록색.
@@ -245,7 +246,7 @@ __global__ void CreateWorld(
 			vfov = 20.0;
 			aperture = 0.0;
 		}
-		else
+		else if (sceneId == 2)
 		{
 			// === earth: 이미지 텍스처를 입힌 구 (원서 Listing 33) ===
 			// earthData는 호스트가 디바이스로 올린 RGB 버퍼. nullptr이면
@@ -254,6 +255,19 @@ __global__ void CreateWorld(
 			list[i++] = new Sphere(Vector3(0.0, 0.0, 0.0), 2.0, new Lambertian(earthTex));
 
 			lookfrom = Vector3(0.0, 0.0, 12.0);
+			vfov = 20.0;
+			aperture = 0.0;
+		}
+		else
+		{
+			// === perlin_spheres: 펄린 노이즈(대리석) 구 (원서 Listing 36/40/47) ===
+			// 두 Lambertian이 같은 NoiseTexture를 공유한다. scale=4로 주파수를 올린다.
+			// NoiseTexture 생성자가 localRandState로 격자 벡터/순열을 디바이스에서 만든다.
+			Texture* pertext = new NoiseTexture(4.0, &localRandState);
+			list[i++] = new Sphere(Vector3(0.0, -1000.0, 0.0), 1000.0, new Lambertian(pertext));
+			list[i++] = new Sphere(Vector3(0.0, 2.0, 0.0), 2.0, new Lambertian(pertext));
+
+			lookfrom = Vector3(13.0, 2.0, 3.0);
 			vfov = 20.0;
 			aperture = 0.0;
 		}
@@ -321,6 +335,7 @@ int main()
 	//   0: bouncing_spheres  — 바닥이 체커 텍스처인 최종 랜덤 구 장면
 	//   1: checkered_spheres — 체커 구 2개
 	//   2: earth             — 지구 이미지 텍스처 구 (earthmap.jpg 필요)
+	//   3: perlin_spheres    — 펄린 노이즈(대리석) 구 2개
 	int sceneId = 0;
 
 	// GPU 스택 크기 증가

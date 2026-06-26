@@ -4,6 +4,7 @@
 
 #include "Vec3.h"
 #include "Interval.h"
+#include "Perlin.h"
 
 // === The Next Week Chapter 4: Texture Mapping (텍스처 매핑) ===
 //
@@ -135,6 +136,43 @@ private:
     const unsigned char* mData;   // 디바이스 글로벌 메모리의 RGB 바이트 버퍼
     int mWidth;
     int mHeight;
+};
+
+// === The Next Week Chapter 5: 펄린 노이즈 텍스처 ===
+//
+// Perlin 노이즈로 만드는 절차적(solid) 텍스처. mScale로 노이즈의 주파수를
+// 조절한다(클수록 무늬가 더 빨리 변한다). 아래 Value는 챕터의 최종형인
+// "대리석(marble)" 효과다 — 색을 sin에 비례시키고 turbulence로 위상을 흔들어
+// 줄무늬가 물결치게 한다.
+//
+// CUDA 메모: Perlin 생성자가 curandState로 격자 데이터를 채우므로,
+// NoiseTexture도 생성 시 randState를 받아 멤버 Perlin을 초기화한다.
+class NoiseTexture : public Texture
+{
+public:
+    __device__ NoiseTexture(double scale, curandState* randState)
+        : mNoise(randState)
+        , mScale(scale)
+    {
+    }
+
+    __device__ Color Value(double u, double v, const Point3& p) const override
+    {
+        // 대리석 무늬 (원서 Listing 47):
+        //   color(.5,.5,.5) * (1 + sin(scale*z + 10*turb(p,7)))
+        return Color(0.5, 0.5, 0.5)
+            * (1.0 + sin(mScale * p.Z() + 10.0 * mNoise.Turb(p, 7)));
+
+        // 참고 — 챕터의 다른 단계들(주석으로 남김):
+        //   - 정수에서 벗어난 부드러운 노이즈:
+        //       return Color(1,1,1) * 0.5 * (1.0 + mNoise.Noise(mScale * p));
+        //   - 난류 직접 사용(위장막 느낌):
+        //       return Color(1,1,1) * mNoise.Turb(p, 7);
+    }
+
+private:
+    Perlin mNoise;
+    double mScale;
 };
 
 #endif
