@@ -66,6 +66,7 @@ public:
                 hitRecord.P = ray.At(hitRecord.T);
                 Vector3 outwardNormal = (hitRecord.P - currentCenter) / mRadius;
                 hitRecord.SetFaceNormal(ray, outwardNormal);
+                GetSphereUV(outwardNormal, hitRecord.U, hitRecord.V);
                 hitRecord.MaterialPtr = mMaterial;
                 return true;
             }
@@ -77,6 +78,7 @@ public:
                 hitRecord.P = ray.At(hitRecord.T);
                 Vector3 outwardNormal = (hitRecord.P - currentCenter) / mRadius;
                 hitRecord.SetFaceNormal(ray, outwardNormal);
+                GetSphereUV(outwardNormal, hitRecord.U, hitRecord.V);
                 hitRecord.MaterialPtr = mMaterial;
                 return true;
             }
@@ -86,6 +88,17 @@ public:
     }
 
     __device__ Aabb BoundingBox() const override { return mBBox; }
+
+    // 정지 구와 동일한 (u,v) 매핑. 움직이는 구도 표면 좌표 자체는 단위 구
+    // 기준으로 동일하게 잡는다(중심 이동과 무관하게 법선 방향으로 결정).
+    __device__ static void GetSphereUV(const Point3& p, double& u, double& v)
+    {
+        const double pi = 3.1415926535897932385;
+        double theta = acos(-p.Y());
+        double phi = atan2(-p.Z(), p.X()) + pi;
+        u = phi / (2.0 * pi);
+        v = theta / pi;
+    }
 
 private:
     Point3 mCenter0;   // 시각 time0에서의 중심

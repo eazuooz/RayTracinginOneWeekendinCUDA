@@ -93,6 +93,10 @@ copy /Y "$(ProjectDir)output.ppm" "$(SolutionDir)output.ppm"</Command>
     <CudaCompile Include="kernel.cu" />
   </ItemGroup>
   <ItemGroup>
+    <!-- stb_image 구현부: 호스트 컴파일러(cl)로만 빌드 (cudafe++ 우회) -->
+    <ClCompile Include="StbImageImpl.cpp" />
+  </ItemGroup>
+  <ItemGroup>
     <ClInclude Include="AABB.h" />
     <ClInclude Include="BvhNode.h" />
     <ClInclude Include="Camera.h" />
@@ -104,8 +108,11 @@ copy /Y "$(ProjectDir)output.ppm" "$(SolutionDir)output.ppm"</Command>
     <ClInclude Include="Metal.h" />
     <ClInclude Include="Ray.h" />
     <ClInclude Include="RtWeekend.h" />
+    <ClInclude Include="RtwImage.h" />
     <ClInclude Include="Sphere.h" />
+    <ClInclude Include="Texture.h" />
     <ClInclude Include="Vec3.h" />
+    <ClInclude Include="external\stb_image.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

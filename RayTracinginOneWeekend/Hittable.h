@@ -12,6 +12,11 @@ struct HitRecord
     Point3 P;
     Vector3 Normal;
     double T;
+    // 표면 텍스처 좌표 (u, v). 레이가 맞은 지점이 2D 텍스처/이미지 상에서
+    // 어디에 대응되는지를 [0,1] x [0,1] 범위로 나타낸다. 각 Hittable의 Hit()이
+    // 채워 넣고, Material(Lambertian)이 이 좌표로 텍스처 색을 조회한다.
+    double U;
+    double V;
     bool bFrontFace;
     Material* MaterialPtr;
 

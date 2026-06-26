@@ -15,10 +15,12 @@
 #include "BvhNode.h"
 #include "Sphere.h"
 #include "MovingSphere.h"
+#include "Texture.h"
 #include "Material.h"
 #include "Metal.h"
 #include "Dielectric.h"
 #include "Camera.h"
+#include "RtwImage.h"
 
 // CUDA 에러 체크 매크로
 #define checkCudaErrors(val) CheckCuda((val), #val, __FILE__, __LINE__)
@@ -136,100 +138,148 @@ __global__ void Render(
 // curand_uniform 단축 매크로 (CreateWorld 내부에서 사용)
 #define RND (curand_uniform(&localRandState))
 
-// GPU에서 랜덤 장면을 생성하는 커널
-// 22×22 격자에 소형 구체를 랜덤 배치하고, 대형 구체 3개와 바닥을 추가한다.
-// 구체 배치 시 (4, 0.2, 0) 근처는 대형 구체와 겹치지 않도록 건너뛴다.
+// GPU에서 장면을 생성하는 커널.
+//
+// === The Next Week Chapter 4: 텍스처 매핑 적용 ===
+// 원서가 main()의 switch로 장면을 고르는 것을 본떠, sceneId로 분기한다.
+//   0: bouncing_spheres  — 최종 랜덤 구 장면(바닥을 "체커 텍스처"로 교체)
+//   1: checkered_spheres — 위아래로 놓인 체커 구 2개
+//   2: earth             — 이미지 텍스처(지구 맵)를 입힌 구 1개
+//
+// earthData/earthW/earthH: 호스트가 stb_image로 로드해 디바이스에 올린
+// RGB 바이트 버퍼와 크기(scene 2에서만 사용). 로드 실패 시 nullptr → 청록색.
 __global__ void CreateWorld(
 	Hittable** list, Hittable** world, Camera** camera,
 	int imageWidth, int imageHeight, curandState* randState, int* outCount,
-	Hittable** bvhNodes, int* outNodeCount)
+	Hittable** bvhNodes, int* outNodeCount,
+	int sceneId, const unsigned char* earthData, int earthW, int earthH)
 {
 	if (threadIdx.x == 0 && blockIdx.x == 0)
 	{
 		curandState localRandState = *randState;
 
-		// [0] 바닥: 거대한 회색 Lambertian 구체
-		list[0] = new Sphere(
-			Vector3(0.0, -1000.0, -1.0), 1000.0,
-			new Lambertian(Color(0.5, 0.5, 0.5)));
+		int i = 0;
 
-		// [1~] 22×22 격자에 소형 구체를 랜덤 배치
-		int i = 1;
-		for (int a = -11; a < 11; a++)
+		// 장면별 카메라 파라미터 (아래 분기에서 채운다)
+		Vector3 lookfrom(13.0, 2.0, 3.0);
+		Vector3 lookat(0.0, 0.0, 0.0);
+		double vfov = 20.0;
+		double aperture = 0.0;
+		double distToFocus = 10.0;
+		double shutterOpen = 0.0;
+		double shutterClose = 0.0;
+
+		if (sceneId == 0)
 		{
-			for (int b = -11; b < 11; b++)
+			// === bouncing_spheres: 바닥을 체커 텍스처로 (원서 Listing 26) ===
+			// 단색 Lambertian 대신, 두 SolidColor를 번갈아 쓰는 CheckerTexture.
+			Texture* checker = new CheckerTexture(
+				0.32,
+				new SolidColor(Color(0.2, 0.3, 0.1)),
+				new SolidColor(Color(0.9, 0.9, 0.9)));
+			list[i++] = new Sphere(
+				Vector3(0.0, -1000.0, -1.0), 1000.0, new Lambertian(checker));
+
+			// 22×22 격자에 소형 구체를 랜덤 배치
+			for (int a = -11; a < 11; a++)
 			{
-				double chooseMat = RND;
-				Vector3 center(a + 0.9 * RND, 0.2, b + 0.9 * RND);
+				for (int b = -11; b < 11; b++)
+				{
+					double chooseMat = RND;
+					Vector3 center(a + 0.9 * RND, 0.2, b + 0.9 * RND);
 
-				// 대형 구체(4, 0.2, 0)와 겹치는 위치는 건너뜀
-				Vector3 diff = center - Vector3(4.0, 0.2, 0.0);
-				if (diff.Length() <= 0.9)
-					continue;
+					// 대형 구체(4, 0.2, 0)와 겹치는 위치는 건너뜀
+					Vector3 diff = center - Vector3(4.0, 0.2, 0.0);
+					if (diff.Length() <= 0.9)
+						continue;
 
-				if (chooseMat < 0.8)
-				{
-					// 80%: Lambertian (랜덤 색상의 난반사) - 모션 블러 적용
-					// 셔터 개방 구간(0~1) 동안 위쪽으로 랜덤하게 튀어오르는 MovingSphere
-					Vector3 center2 = center + Vector3(0.0, 0.5 * RND, 0.0);
-					list[i++] = new MovingSphere(
-						center, center2, 0.0, 1.0, 0.2,
-						new Lambertian(Color(RND * RND, RND * RND, RND * RND)));
-				}
-				else if (chooseMat < 0.95)
-				{
-					// 15%: Metal (밝은 랜덤 색상, 랜덤 fuzz)
-					list[i++] = new Sphere(
-						center, 0.2,
-						new Metal(
-							Color(0.5 * (1.0 + RND), 0.5 * (1.0 + RND), 0.5 * (1.0 + RND)),
-							0.5 * RND));
-				}
-				else
-				{
-					// 5%: Dielectric (유리)
-					list[i++] = new Sphere(center, 0.2, new Dielectric(1.5));
+					if (chooseMat < 0.8)
+					{
+						// 80%: Lambertian (랜덤 색상의 난반사) - 모션 블러 적용
+						Vector3 center2 = center + Vector3(0.0, 0.5 * RND, 0.0);
+						list[i++] = new MovingSphere(
+							center, center2, 0.0, 1.0, 0.2,
+							new Lambertian(Color(RND * RND, RND * RND, RND * RND)));
+					}
+					else if (chooseMat < 0.95)
+					{
+						// 15%: Metal (밝은 랜덤 색상, 랜덤 fuzz)
+						list[i++] = new Sphere(
+							center, 0.2,
+							new Metal(
+								Color(0.5 * (1.0 + RND), 0.5 * (1.0 + RND), 0.5 * (1.0 + RND)),
+								0.5 * RND));
+					}
+					else
+					{
+						// 5%: Dielectric (유리)
+						list[i++] = new Sphere(center, 0.2, new Dielectric(1.5));
+					}
 				}
 			}
+
+			// 대형 구체 3개: 유리, Lambertian, Metal
+			list[i++] = new Sphere(Vector3(0.0, 1.0, 0.0), 1.0, new Dielectric(1.5));
+			list[i++] = new Sphere(Vector3(-4.0, 1.0, 0.0), 1.0, new Lambertian(Color(0.4, 0.2, 0.1)));
+			list[i++] = new Sphere(Vector3(4.0, 1.0, 0.0), 1.0, new Metal(Color(0.7, 0.6, 0.5), 0.0));
+
+			lookfrom = Vector3(13.0, 2.0, 3.0);
+			vfov = 30.0;
+			aperture = 0.1;     // 얕은 피사계 심도
+			shutterOpen = 0.0;  // 모션 블러 셔터 구간
+			shutterClose = 1.0;
+		}
+		else if (sceneId == 1)
+		{
+			// === checkered_spheres: 체커 구 2개 (원서 Listing 28) ===
+			// 두 Lambertian이 같은 CheckerTexture 포인터를 공유한다.
+			Texture* checker = new CheckerTexture(
+				0.32,
+				new SolidColor(Color(0.2, 0.3, 0.1)),
+				new SolidColor(Color(0.9, 0.9, 0.9)));
+
+			list[i++] = new Sphere(Vector3(0.0, -10.0, 0.0), 10.0, new Lambertian(checker));
+			list[i++] = new Sphere(Vector3(0.0, 10.0, 0.0), 10.0, new Lambertian(checker));
+
+			lookfrom = Vector3(13.0, 2.0, 3.0);
+			vfov = 20.0;
+			aperture = 0.0;
+		}
+		else
+		{
+			// === earth: 이미지 텍스처를 입힌 구 (원서 Listing 33) ===
+			// earthData는 호스트가 디바이스로 올린 RGB 버퍼. nullptr이면
+			// ImageTexture::Value가 청록색을 반환한다(디버깅 표시).
+			Texture* earthTex = new ImageTexture(earthData, earthW, earthH);
+			list[i++] = new Sphere(Vector3(0.0, 0.0, 0.0), 2.0, new Lambertian(earthTex));
+
+			lookfrom = Vector3(0.0, 0.0, 12.0);
+			vfov = 20.0;
+			aperture = 0.0;
 		}
 
-		// 대형 구체 3개: 유리, Lambertian, Metal
-		list[i++] = new Sphere(Vector3(0.0, 1.0, 0.0), 1.0, new Dielectric(1.5));
-		list[i++] = new Sphere(Vector3(-4.0, 1.0, 0.0), 1.0, new Lambertian(Color(0.4, 0.2, 0.1)));
-		list[i++] = new Sphere(Vector3(4.0, 1.0, 0.0), 1.0, new Metal(Color(0.7, 0.6, 0.5), 0.0));
-
 		*randState = localRandState;
-		// continue로 건너뛴 구체가 있으므로 고정값 대신 실제 배치된 수 i를 사용
-		*outCount = i;  // host에서 FreeWorld 호출 시 실제 count 전달용
+		*outCount = i;  // 실제 배치된 프리미티브 수 (FreeWorld에서 사용)
 
-		// === BVH 빌드 ===
-		// 기존에는 *world = HittableList(선형 탐색)였으나,
-		// 이제 list[0..i)를 BVH로 묶어 레이-객체 교차를 로그 시간에 가깝게 만든다.
-		// 빌드 과정에서 list 배열은 분할 축 기준으로 제자리 정렬되지만,
-		// 모든 잎 포인터는 그대로 보존되므로 FreeWorld의 list[] 해제에는 영향 없다.
+		// === BVH 빌드 (모든 장면 공통) ===
+		// list[0..i)를 BVH로 묶어 레이-객체 교차를 로그 시간에 가깝게 만든다.
 		int nodeCount = 0;
 		BvhNode* root = new BvhNode(list, 0, i, bvhNodes, &nodeCount);
 		bvhNodes[nodeCount++] = root;  // 루트도 해제 레지스트리에 등록
 		*outNodeCount = nodeCount;
 		*world = root;
 
-		// 카메라: (13,2,3)에서 원점을 바라봄, 얕은 피사계 심도 + 모션 블러
-		// time0=0, time1=1: 셔터 개방 구간. 각 레이가 이 구간에서 랜덤 시각을 가진다.
-		Vector3 lookfrom(13.0, 2.0, 3.0);
-		Vector3 lookat(0.0, 0.0, 0.0);
-		double distToFocus = 10.0;
-		double aperture = 0.1;
-
+		// === 카메라 (장면별 파라미터로 공통 생성) ===
 		*camera = new Camera(
 			lookfrom,
 			lookat,
 			Vector3(0.0, 1.0, 0.0),
-			30.0,
+			vfov,
 			double(imageWidth) / double(imageHeight),
 			aperture,
 			distToFocus,
-			0.0,   // 셔터 개방 시각
-			1.0);  // 셔터 닫힘 시각
+			shutterOpen,
+			shutterClose);
 	}
 }
 
@@ -266,6 +316,12 @@ int main()
 
 	int blockWidth = 8;
 	int blockHeight = 8;
+
+	// === 렌더링할 장면 선택 (The Next Week Ch.4 텍스처 매핑) ===
+	//   0: bouncing_spheres  — 바닥이 체커 텍스처인 최종 랜덤 구 장면
+	//   1: checkered_spheres — 체커 구 2개
+	//   2: earth             — 지구 이미지 텍스처 구 (earthmap.jpg 필요)
+	int sceneId = 0;
 
 	// GPU 스택 크기 증가
 	// MovingSphere 추가로 가상함수 깊이가 늘어 스택 소비 증가 → 32768로 확장.
@@ -320,7 +376,24 @@ int main()
 	checkCudaErrors(cudaMallocManaged((void**)&d_numNodes, sizeof(int)));
 	*d_numNodes = 0;
 
-	CreateWorld<<<1, 1>>>(list, world, camera, imageWidth, imageHeight, randState2, d_numHittables, bvhNodes, d_numNodes);
+	// === 이미지 텍스처 업로드 (scene 2에서만) ===
+	// 호스트에서 stb_image로 디코딩 → 디바이스 글로벌 메모리로 업로드.
+	// RtwImage 소멸자가 디바이스 버퍼를 해제하므로, 렌더가 끝날 때까지
+	// 살아 있도록 main 스코프에 둔다. 파일이 없으면 DeviceData()==nullptr →
+	// 커널의 ImageTexture가 청록색을 표시한다.
+	RtwImage earthImage;
+	const unsigned char* earthData = nullptr;
+	int earthW = 0, earthH = 0;
+	if (sceneId == 2)
+	{
+		earthImage.Load("earthmap.jpg");
+		earthData = earthImage.DeviceData();
+		earthW = earthImage.Width();
+		earthH = earthImage.Height();
+	}
+
+	CreateWorld<<<1, 1>>>(list, world, camera, imageWidth, imageHeight, randState2, d_numHittables, bvhNodes, d_numNodes,
+		sceneId, earthData, earthW, earthH);
 	checkCudaErrors(cudaGetLastError());
 	checkCudaErrors(cudaDeviceSynchronize());
 
