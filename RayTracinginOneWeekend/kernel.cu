@@ -15,6 +15,7 @@
 #include "BvhNode.h"
 #include "Sphere.h"
 #include "MovingSphere.h"
+#include "Quad.h"
 #include "Texture.h"
 #include "Material.h"
 #include "Metal.h"
@@ -146,6 +147,7 @@ __global__ void Render(
 //   1: checkered_spheres — 위아래로 놓인 체커 구 2개
 //   2: earth             — 이미지 텍스처(지구 맵)를 입힌 구 1개
 //   3: perlin_spheres    — 펄린 노이즈(대리석) 텍스처 구 2개
+//   4: quads             — 5색 사각형(평행사변형) 장면
 //
 // earthData/earthW/earthH: 호스트가 stb_image로 로드해 디바이스에 올린
 // RGB 바이트 버퍼와 크기(scene 2에서만 사용). 로드 실패 시 nullptr → 청록색.
@@ -258,7 +260,7 @@ __global__ void CreateWorld(
 			vfov = 20.0;
 			aperture = 0.0;
 		}
-		else
+		else if (sceneId == 3)
 		{
 			// === perlin_spheres: 펄린 노이즈(대리석) 구 (원서 Listing 36/40/47) ===
 			// 두 Lambertian이 같은 NoiseTexture를 공유한다. scale=4로 주파수를 올린다.
@@ -269,6 +271,27 @@ __global__ void CreateWorld(
 
 			lookfrom = Vector3(13.0, 2.0, 3.0);
 			vfov = 20.0;
+			aperture = 0.0;
+		}
+		else
+		{
+			// === quads: 5색 사각형(평행사변형) 장면 (원서 Listing 54) ===
+			// 두 번째 프리미티브 Quad를 시연. 각 면을 다른 색 Lambertian으로.
+			list[i++] = new Quad(Vector3(-3, -2, 5), Vector3(0, 0, -4), Vector3(0, 4, 0),
+				new Lambertian(Color(1.0, 0.2, 0.2)));   // left  (red)
+			list[i++] = new Quad(Vector3(-2, -2, 0), Vector3(4, 0, 0), Vector3(0, 4, 0),
+				new Lambertian(Color(0.2, 1.0, 0.2)));   // back  (green)
+			list[i++] = new Quad(Vector3(3, -2, 1), Vector3(0, 0, 4), Vector3(0, 4, 0),
+				new Lambertian(Color(0.2, 0.2, 1.0)));   // right (blue)
+			list[i++] = new Quad(Vector3(-2, 3, 1), Vector3(4, 0, 0), Vector3(0, 0, 4),
+				new Lambertian(Color(1.0, 0.5, 0.0)));   // upper (orange)
+			list[i++] = new Quad(Vector3(-2, -3, 5), Vector3(4, 0, 0), Vector3(0, 0, -4),
+				new Lambertian(Color(0.2, 0.8, 0.8)));   // lower (teal)
+
+			// 원서는 정사각형(aspect 1.0)으로 렌더하지만, 우리 출력은 1440x720(2:1)
+			// 이라 카메라 aspect도 그에 맞춰진다(가로로 조금 넓게 보임).
+			lookfrom = Vector3(0.0, 0.0, 9.0);
+			vfov = 80.0;
 			aperture = 0.0;
 		}
 
@@ -336,7 +359,8 @@ int main()
 	//   1: checkered_spheres — 체커 구 2개
 	//   2: earth             — 지구 이미지 텍스처 구 (earthmap.jpg 필요)
 	//   3: perlin_spheres    — 펄린 노이즈(대리석) 구 2개
-	int sceneId = 0;
+	//   4: quads             — 5색 사각형(평행사변형) 장면
+	int sceneId = 4;
 
 	// GPU 스택 크기 증가
 	// MovingSphere 추가로 가상함수 깊이가 늘어 스택 소비 증가 → 32768로 확장.

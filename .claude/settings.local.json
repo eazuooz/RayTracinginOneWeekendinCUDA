@@ -28,7 +28,8 @@
       "PowerShell($sln = \"D:\\\\Github\\\\RayTracinginOneWeekendinCUDA\\\\RayTracinginOneWeekendinCUDA.sln\"; $vcvars = \"C:\\\\Program Files\\\\Microsoft Visual Studio\\\\2022\\\\Community\\\\VC\\\\Auxiliary\\\\Build\\\\vcvars64.bat\"; $cmd = \"call `\"$vcvars`\" && msbuild `\"$sln`\" /t:Rebuild /p:Configuration=Debug /p:Platform=x64 /m /nologo /v:minimal /p:PostBuildEventUseInBuild=false\"; cmd /c $cmd 2>&1 | Select-Object -Last 40; Write-Output \"=== exit: $LASTEXITCODE ===\")",
       "PowerShell(Push-Location *)",
       "Bash(cd \"C:/Users/1/.claude/projects/D--Github-RayTracinginOneWeekendinCUDA/memory\")",
-      "Bash(cat MEMORY.md)"
+      "Bash(cat MEMORY.md)",
+      "Bash(python -c ' *)"
     ]
   }
 }

@@ -26,6 +26,7 @@ public:
     __host__ __device__ Aabb(const Interval& x, const Interval& y, const Interval& z)
         : X(x), Y(y), Z(z)
     {
+        PadToMinimums();
     }
 
     // 두 점 a, b를 상자의 양 극점으로 보고 AABB를 만든다
@@ -35,6 +36,7 @@ public:
         X = (a[0] <= b[0]) ? Interval(a[0], b[0]) : Interval(b[0], a[0]);
         Y = (a[1] <= b[1]) ? Interval(a[1], b[1]) : Interval(b[1], a[1]);
         Z = (a[2] <= b[2]) ? Interval(a[2], b[2]) : Interval(b[2], a[2]);
+        PadToMinimums();
     }
 
     // 두 AABB를 모두 감싸는 AABB를 만든다 (BVH 노드의 경계 합산용)
@@ -102,6 +104,19 @@ public:
             return X.Size() > Z.Size() ? 0 : 2;
         else
             return Y.Size() > Z.Size() ? 1 : 2;
+    }
+
+private:
+    // === The Next Week Chapter 6: 두께 0 AABB 패딩 ===
+    // 사각형(quad)처럼 평평한 도형이 XY/YZ/ZX 평면에 놓이면 한 축의 두께가 0이
+    // 되어 레이-상자 교차에서 수치 문제가 생길 수 있다. 어느 변도 delta보다
+    // 좁지 않도록 살짝 패딩한다. (교차 결과는 그대로, 경계만 약간 넓힌다.)
+    __host__ __device__ void PadToMinimums()
+    {
+        double delta = 0.0001;
+        if (X.Size() < delta) X = X.Expand(delta);
+        if (Y.Size() < delta) Y = Y.Expand(delta);
+        if (Z.Size() < delta) Z = Z.Expand(delta);
     }
 };
 
