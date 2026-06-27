@@ -50,7 +50,8 @@ public:
     __device__ Aabb BoundingBox() const override { return mBBox; }
 
     __device__ bool Hit(
-        const Ray& ray, double tMin, double tMax, HitRecord& hitRecord) const override
+        const Ray& ray, double tMin, double tMax, HitRecord& hitRecord,
+        curandState* randState) const override
     {
         double denom = Dot(mNormal, ray.Direction());
 

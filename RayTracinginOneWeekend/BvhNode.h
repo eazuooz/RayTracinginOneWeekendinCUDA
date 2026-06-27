@@ -102,7 +102,8 @@ public:
         const Ray& ray,
         double tMin,
         double tMax,
-        HitRecord& hitRecord) const override
+        HitRecord& hitRecord,
+        curandState* randState) const override
     {
         // 트리 높이는 균형 분할로 ~log2(N) 이므로 32 면 충분(N < 2^32).
         const BvhNode* stack[32];
@@ -133,7 +134,7 @@ public:
                     else
                     {
                         // 잎(primitive): 직접 교차 검사. 더 가까우면 closest 갱신
-                        if (kid->Hit(ray, tMin, closest, hitRecord))
+                        if (kid->Hit(ray, tMin, closest, hitRecord, randState))
                         {
                             hitAnything = true;
                             closest = hitRecord.T;

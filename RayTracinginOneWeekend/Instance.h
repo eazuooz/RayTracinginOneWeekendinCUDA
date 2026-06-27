@@ -39,13 +39,14 @@ public:
     __device__ ~Translate() override { delete mObject; }
 
     __device__ bool Hit(
-        const Ray& ray, double tMin, double tMax, HitRecord& rec) const override
+        const Ray& ray, double tMin, double tMax, HitRecord& rec,
+        curandState* randState) const override
     {
         // 1) 레이를 -offset 만큼 옮긴다(월드 → 오브젝트 공간).
         Ray offsetRay(ray.Origin() - mOffset, ray.Direction(), ray.Time());
 
         // 2) 옮긴 레이로 교차 검사.
-        if (!mObject->Hit(offsetRay, tMin, tMax, rec))
+        if (!mObject->Hit(offsetRay, tMin, tMax, rec, randState))
             return false;
 
         // 3) 교점을 +offset 으로 되돌린다(오브젝트 → 월드 공간).
@@ -113,7 +114,8 @@ public:
     __device__ ~RotateY() override { delete mObject; }
 
     __device__ bool Hit(
-        const Ray& ray, double tMin, double tMax, HitRecord& rec) const override
+        const Ray& ray, double tMin, double tMax, HitRecord& rec,
+        curandState* randState) const override
     {
         // 레이를 월드 → 오브젝트 공간으로 회전(-θ).
         Point3 origin(
@@ -129,7 +131,7 @@ public:
         Ray rotatedRay(origin, direction, ray.Time());
 
         // 오브젝트 공간에서 교차 검사.
-        if (!mObject->Hit(rotatedRay, tMin, tMax, rec))
+        if (!mObject->Hit(rotatedRay, tMin, tMax, rec, randState))
             return false;
 
         // 교점을 오브젝트 → 월드 공간으로 되돌린다(+θ).

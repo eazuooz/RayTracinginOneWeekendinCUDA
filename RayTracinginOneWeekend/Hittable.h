@@ -4,6 +4,7 @@
 
 #include "Ray.h"
 #include "AABB.h"
+#include <curand_kernel.h>
 
 class Material;
 
@@ -39,11 +40,18 @@ public:
     // 연쇄 호출되려면 베이스에 가상 소멸자가 있어야 한다.
     __device__ virtual ~Hittable() {}
 
+    // === The Next Week Chapter 9: Volumes ===
+    // randState 인자 추가. ConstantMedium(볼륨)의 Hit는 "이 레이가 매질 안에서
+    // 산란하는 지점"을 난수로 정한다(hit_distance = -1/density * log(random)).
+    // 그래서 Hit에 픽셀별 cuRAND 상태가 필요하다. 볼륨이 아닌 표면(구/사각형 등)은
+    // 이 인자를 쓰지 않지만, 가상 함수 시그니처를 맞추려 모두 받는다. BVH/리스트/
+    // 인스턴스는 자식 Hit로 그대로 넘긴다.
     __device__ virtual bool Hit(
         const Ray& ray,
         double tMin,
         double tMax,
-        HitRecord& hitRecord) const = 0;
+        HitRecord& hitRecord,
+        curandState* randState) const = 0;
 
     // 이 객체를 감싸는 AABB를 반환한다.
     // BVH가 객체를 계층적으로 묶으려면 모든 Hittable이 자신의 경계 상자를

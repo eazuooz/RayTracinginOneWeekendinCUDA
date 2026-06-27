@@ -131,4 +131,39 @@ private:
     Texture* mTexture;
 };
 
+// === The Next Week Chapter 9: 등방성 산란 (Isotropic) ===
+//
+// ConstantMedium(연기/안개)이 산란할 때 쓰는 위상 함수(phase function).
+// 입사 방향과 무관하게 "균일한 무작위 방향"으로 산란시킨다(등방성). 감쇠색은
+// 텍스처로 조회하므로 단색(연기=검정, 안개=흰색)뿐 아니라 임의 텍스처도 가능.
+class Isotropic : public Material
+{
+public:
+    __device__ Isotropic(const Color& albedo)
+        : mTexture(new SolidColor(albedo))
+    {
+    }
+
+    __device__ Isotropic(Texture* texture)
+        : mTexture(texture)
+    {
+    }
+
+    __device__ bool Scatter(
+        const Ray& rayIn,
+        const HitRecord& rec,
+        Color& attenuation,
+        Ray& scattered,
+        curandState* randState) const override
+    {
+        // 균일 무작위 방향(단위 구 위의 한 점). 입사 레이의 time은 보존한다.
+        scattered = Ray(rec.P, UnitVector(RandomInUnitSphere(randState)), rayIn.Time());
+        attenuation = mTexture->Value(rec.U, rec.V, rec.P);
+        return true;
+    }
+
+private:
+    Texture* mTexture;
+};
+
 #endif

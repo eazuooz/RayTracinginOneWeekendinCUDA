@@ -23,7 +23,8 @@ public:
         const Ray& ray,
         double tMin,
         double tMax,
-        HitRecord& hitRecord) const override
+        HitRecord& hitRecord,
+        curandState* randState) const override
     {
         Vector3 oc = ray.Origin() - mCenter;
         double a = Dot(ray.Direction(), ray.Direction());

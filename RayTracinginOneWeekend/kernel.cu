@@ -17,6 +17,7 @@
 #include "MovingSphere.h"
 #include "Quad.h"
 #include "Instance.h"
+#include "ConstantMedium.h"
 #include "Texture.h"
 #include "Material.h"
 #include "Metal.h"
@@ -70,7 +71,7 @@ __device__ Color RayColor(const Ray& r, const Color& background, Hittable** worl
 	for (int i = 0; i < 50; i++)
 	{
 		HitRecord rec;
-		if (!(*world)->Hit(currentRay, 0.001, DBL_MAX, rec))
+		if (!(*world)->Hit(currentRay, 0.001, DBL_MAX, rec, randState))
 		{
 			// 아무것도 안 맞음 → 배경색
 			accumulated += throughput * background;
@@ -167,6 +168,7 @@ __global__ void Render(
 //   5: simple_light      — 펄린 구 + 사각형/구 광원 (배경 검정)
 //   6: cornell_box       — 빈 코넬 박스 (천장 광원, 배경 검정)
 //   7: cornell_box(상자2) — 회전·이동시킨 직육면체 2개 추가 (인스턴스 시연)
+//   8: cornell_smoke      — 두 상자를 연기/안개 볼륨으로 (ConstantMedium)
 //
 // earthData/earthW/earthH: 호스트가 stb_image로 로드해 디바이스에 올린
 // RGB 바이트 버퍼와 크기(scene 2에서만 사용). 로드 실패 시 nullptr → 청록색.
@@ -357,7 +359,7 @@ __global__ void CreateWorld(
 			vfov = 40.0;
 			aperture = 0.0;
 		}
-		else
+		else if (sceneId == 7)
 		{
 			// === cornell_box (두 회전 상자): 인스턴스 시연 (원서 Listing 62~70) ===
 			// scene 6과 같은 5벽+광원에, 회전·이동시킨 직육면체 2개를 추가한다.
@@ -386,6 +388,43 @@ __global__ void CreateWorld(
 			box2 = new RotateY(box2, -18.0);
 			box2 = new Translate(box2, Vector3(130, 0, 65));
 			list[i++] = box2;
+
+			background = Color(0.0, 0.0, 0.0);
+			lookfrom = Vector3(278.0, 278.0, -800.0);
+			lookat = Vector3(278.0, 278.0, 0.0);
+			vfov = 40.0;
+			aperture = 0.0;
+		}
+		else
+		{
+			// === cornell_smoke: 연기/안개 상자 코넬 박스 (원서 Listing 73) ===
+			// scene 7의 두 회전 상자를 ConstantMedium(볼륨)으로 감싼다.
+			//   상자1 → 밀도 0.01, 색 (0,0,0) = 어두운 연기
+			//   상자2 → 밀도 0.01, 색 (1,1,1) = 밝은 안개
+			// 빠른 수렴을 위해 광원을 더 크고(113,554,127 ~) 어둡게((7,7,7)) 잡는다.
+			Material* red = new Lambertian(Color(0.65, 0.05, 0.05));
+			Material* white = new Lambertian(Color(0.73, 0.73, 0.73));
+			Material* green = new Lambertian(Color(0.12, 0.45, 0.15));
+			Material* light = new DiffuseLight(Color(7.0, 7.0, 7.0));
+
+			list[i++] = new Quad(Vector3(555, 0, 0), Vector3(0, 555, 0), Vector3(0, 0, 555), green);
+			list[i++] = new Quad(Vector3(0, 0, 0), Vector3(0, 555, 0), Vector3(0, 0, 555), red);
+			list[i++] = new Quad(Vector3(113, 554, 127), Vector3(330, 0, 0), Vector3(0, 0, 305), light);
+			list[i++] = new Quad(Vector3(0, 555, 0), Vector3(555, 0, 0), Vector3(0, 0, 555), white);
+			list[i++] = new Quad(Vector3(0, 0, 0), Vector3(555, 0, 0), Vector3(0, 0, 555), white);
+			list[i++] = new Quad(Vector3(0, 0, 555), Vector3(555, 0, 0), Vector3(0, 555, 0), white);
+
+			// 키 큰 상자 → 어두운 연기
+			Hittable* box1 = MakeBox(Point3(0, 0, 0), Point3(165, 330, 165), white);
+			box1 = new RotateY(box1, 15.0);
+			box1 = new Translate(box1, Vector3(265, 0, 295));
+			list[i++] = new ConstantMedium(box1, 0.01, Color(0.0, 0.0, 0.0));
+
+			// 키 작은 상자 → 밝은 안개
+			Hittable* box2 = MakeBox(Point3(0, 0, 0), Point3(165, 165, 165), white);
+			box2 = new RotateY(box2, -18.0);
+			box2 = new Translate(box2, Vector3(130, 0, 65));
+			list[i++] = new ConstantMedium(box2, 0.01, Color(1.0, 1.0, 1.0));
 
 			background = Color(0.0, 0.0, 0.0);
 			lookfrom = Vector3(278.0, 278.0, -800.0);
@@ -462,11 +501,12 @@ int main()
 	//   5: simple_light      — 사각형/구 광원 (배경 검정)
 	//   6: cornell_box       — 빈 코넬 박스 (천장 광원, 배경 검정)
 	//   7: cornell_box(상자2) — 회전·이동시킨 직육면체 2개를 넣은 코넬 박스
-	int sceneId = 7;
+	//   8: cornell_smoke      — 두 상자를 연기/안개 볼륨으로 (ConstantMedium)
+	int sceneId = 8;
 
-	// 픽셀당 샘플 수. 빛 장면(5,6,7)은 작은 광원 때문에 노이즈가 심하므로
+	// 픽셀당 샘플 수. 빛 장면(5,6,7,8)은 작은 광원 때문에 노이즈가 심하므로
 	// 샘플을 크게 잡는다(원서도 100~200 사용).
-	int numSamples = (sceneId == 5 || sceneId == 6 || sceneId == 7) ? 200 : 10;
+	int numSamples = (sceneId >= 5 && sceneId <= 8) ? 200 : 10;
 
 	// GPU 스택 크기 증가
 	// MovingSphere 추가로 가상함수 깊이가 늘어 스택 소비 증가 → 32768로 확장.

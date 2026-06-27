@@ -36,7 +36,8 @@ public:
         }
     }
 
-    __device__ bool Hit(const Ray& ray, double tMin, double tMax, HitRecord& hitRecord) const override
+    __device__ bool Hit(const Ray& ray, double tMin, double tMax, HitRecord& hitRecord,
+        curandState* randState) const override
     {
         HitRecord tempRecord;
         bool bHitAnything = false;
@@ -44,7 +45,7 @@ public:
 
         for (int i = 0; i < mCount; i++)
         {
-            if (mList[i]->Hit(ray, tMin, closestSoFar, tempRecord))
+            if (mList[i]->Hit(ray, tMin, closestSoFar, tempRecord, randState))
             {
                 bHitAnything = true;
                 closestSoFar = tempRecord.T;

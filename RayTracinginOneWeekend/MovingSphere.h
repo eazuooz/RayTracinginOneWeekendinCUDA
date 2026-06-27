@@ -45,7 +45,8 @@ public:
         const Ray& ray,
         double tMin,
         double tMax,
-        HitRecord& hitRecord) const override
+        HitRecord& hitRecord,
+        curandState* randState) const override
     {
         // 레이 발사 시각에 따라 구체 중심 보간 (멤버함수 호출 대신 직접 계산)
         double frac = (ray.Time() - mTime0) / (mTime1 - mTime0);
