@@ -169,6 +169,7 @@ __global__ void Render(
 //   6: cornell_box       — 빈 코넬 박스 (천장 광원, 배경 검정)
 //   7: cornell_box(상자2) — 회전·이동시킨 직육면체 2개 추가 (인스턴스 시연)
 //   8: cornell_smoke      — 두 상자를 연기/안개 볼륨으로 (ConstantMedium)
+//   9: final_scene        — 모든 기능을 모은 최종 장면 (원서 Listing 74)
 //
 // earthData/earthW/earthH: 호스트가 stb_image로 로드해 디바이스에 올린
 // RGB 바이트 버퍼와 크기(scene 2에서만 사용). 로드 실패 시 nullptr → 청록색.
@@ -395,7 +396,7 @@ __global__ void CreateWorld(
 			vfov = 40.0;
 			aperture = 0.0;
 		}
-		else
+		else if (sceneId == 8)
 		{
 			// === cornell_smoke: 연기/안개 상자 코넬 박스 (원서 Listing 73) ===
 			// scene 7의 두 회전 상자를 ConstantMedium(볼륨)으로 감싼다.
@@ -431,6 +432,88 @@ __global__ void CreateWorld(
 			lookat = Vector3(278.0, 278.0, 0.0);
 			vfov = 40.0;
 			aperture = 0.0;
+		}
+		else
+		{
+			// === final_scene: 모든 새 기능을 테스트하는 최종 장면 (원서 Listing 74) ===
+			// 전체를 덮는 크고 얇은 안개 + 청색 표면하부 산란 구(유전체 내부의 볼륨)를
+			// 포함해 지금까지의 모든 요소를 한 장면에 모은다.
+
+			// 바닥: 20x20 = 400개, 높이가 랜덤인 상자 (원서 boxes1)
+			Material* ground = new Lambertian(Color(0.48, 0.83, 0.53));
+			const int boxesPerSide = 20;
+			for (int bi = 0; bi < boxesPerSide; bi++)
+			{
+				for (int bj = 0; bj < boxesPerSide; bj++)
+				{
+					double w = 100.0;
+					double x0 = -1000.0 + bi * w;
+					double z0 = -1000.0 + bj * w;
+					double x1 = x0 + w;
+					double y1 = 1.0 + 100.0 * RND;   // random_double(1,101)
+					double z1 = z0 + w;
+					list[i++] = MakeBox(Point3(x0, 0.0, z0), Point3(x1, y1, z1), ground);
+				}
+			}
+
+			// 광원
+			Material* light = new DiffuseLight(Color(7.0, 7.0, 7.0));
+			list[i++] = new Quad(Vector3(123, 554, 147), Vector3(300, 0, 0), Vector3(0, 0, 265), light);
+
+			// 모션 블러 구 (center1 → center2 로 이동)
+			Material* sphereMaterial = new Lambertian(Color(0.7, 0.3, 0.1));
+			list[i++] = new MovingSphere(
+				Point3(400, 400, 200), Point3(430, 400, 200), 0.0, 1.0, 50.0, sphereMaterial);
+
+			// 유리 구 + 금속 구
+			list[i++] = new Sphere(Point3(260, 150, 45), 50.0, new Dielectric(1.5));
+			list[i++] = new Sphere(Point3(0, 150, 145), 50.0, new Metal(Color(0.8, 0.8, 0.9), 1.0));
+
+			// 청색 표면하부 산란 구: 유리 경계 + 내부 볼륨.
+			// 원서는 같은 sphere 포인터를 유리와 볼륨이 공유하지만, 우리의 raw 포인터
+			// 모델에서는 더블 프리가 되므로 동일한 구를 2개 만든다(하나는 보이는 유리,
+			// 하나는 ConstantMedium이 소유하는 경계).
+			list[i++] = new Sphere(Point3(360, 150, 145), 70.0, new Dielectric(1.5));
+			Hittable* blueBoundary = new Sphere(Point3(360, 150, 145), 70.0, new Dielectric(1.5));
+			list[i++] = new ConstantMedium(blueBoundary, 0.2, Color(0.2, 0.4, 0.9));
+
+			// 전체를 덮는 얇은 안개: 거대한(반지름 5000) 유리 구 경계 + 매우 옅은 볼륨
+			Hittable* mistBoundary = new Sphere(Point3(0, 0, 0), 5000.0, new Dielectric(1.5));
+			list[i++] = new ConstantMedium(mistBoundary, 0.0001, Color(1.0, 1.0, 1.0));
+
+			// 지구 이미지 텍스처 구 (earthmap.jpg; 없으면 청록색)
+			Texture* earthTex = new ImageTexture(earthData, earthW, earthH);
+			list[i++] = new Sphere(Point3(400, 200, 400), 100.0, new Lambertian(earthTex));
+
+			// 펄린 노이즈 구
+			Texture* pertext = new NoiseTexture(0.2, &localRandState);
+			list[i++] = new Sphere(Point3(220, 280, 300), 80.0, new Lambertian(pertext));
+
+			// 1000개의 작은 흰 구 클러스터 → 15° 회전 + 이동.
+			// 원서는 bvh_node로 묶지만, Translate/RotateY가 자식을 delete하는 우리
+			// 메모리 모델과 BVH 노드 레지스트리 해제가 충돌한다. 그래서 "소유하는
+			// HittableList"로 묶는다(MakeBox와 동일 패턴). 메인 BVH가 이 그룹의 경계
+			// 상자로 컬링하므로, 그룹 bbox에 들어온 레이만 1000개를 선형 검사한다.
+			Material* white = new Lambertian(Color(0.73, 0.73, 0.73));
+			const int ns = 1000;
+			Hittable** boxes2 = new Hittable*[ns];
+			for (int s = 0; s < ns; s++)
+			{
+				Point3 c(165.0 * RND, 165.0 * RND, 165.0 * RND);   // point3::random(0,165)
+				boxes2[s] = new Sphere(c, 10.0, white);
+			}
+			Hittable* cluster = new HittableList(boxes2, ns, true);   // 1000개 구를 소유
+			cluster = new RotateY(cluster, 15.0);
+			cluster = new Translate(cluster, Vector3(-100, 270, 395));
+			list[i++] = cluster;
+
+			background = Color(0.0, 0.0, 0.0);
+			lookfrom = Vector3(478.0, 278.0, -600.0);
+			lookat = Vector3(278.0, 278.0, 0.0);
+			vfov = 40.0;
+			aperture = 0.0;
+			shutterOpen = 0.0;     // 모션 블러 셔터 구간 (이동 구와 일치)
+			shutterClose = 1.0;
 		}
 
 		*randState = localRandState;
@@ -492,7 +575,7 @@ int main()
 	int blockWidth = 8;
 	int blockHeight = 8;
 
-	// === 렌더링할 장면 선택 (The Next Week Ch.4~7) ===
+	// === 렌더링할 장면 선택 (The Next Week Ch.4~10) ===
 	//   0: bouncing_spheres  — 바닥이 체커 텍스처인 최종 랜덤 구 장면
 	//   1: checkered_spheres — 체커 구 2개
 	//   2: earth             — 지구 이미지 텍스처 구 (earthmap.jpg 필요)
@@ -502,11 +585,12 @@ int main()
 	//   6: cornell_box       — 빈 코넬 박스 (천장 광원, 배경 검정)
 	//   7: cornell_box(상자2) — 회전·이동시킨 직육면체 2개를 넣은 코넬 박스
 	//   8: cornell_smoke      — 두 상자를 연기/안개 볼륨으로 (ConstantMedium)
-	int sceneId = 8;
+	//   9: final_scene        — 모든 기능을 모은 최종 장면 (원서 Listing 74)
+	int sceneId = 9;
 
-	// 픽셀당 샘플 수. 빛 장면(5,6,7,8)은 작은 광원 때문에 노이즈가 심하므로
-	// 샘플을 크게 잡는다(원서도 100~200 사용).
-	int numSamples = (sceneId >= 5 && sceneId <= 8) ? 200 : 10;
+	// 픽셀당 샘플 수. 빛/볼륨 장면(5~9)은 작은 광원·산란 때문에 노이즈가 심하므로
+	// 샘플을 크게 잡는다(원서도 100~10000 사용). 최종 장면(9)은 무거워 100으로 둔다.
+	int numSamples = (sceneId == 9) ? 100 : ((sceneId >= 5 && sceneId <= 8) ? 200 : 10);
 
 	// GPU 스택 크기 증가
 	// MovingSphere 추가로 가상함수 깊이가 늘어 스택 소비 증가 → 32768로 확장.
@@ -537,8 +621,11 @@ int main()
 	checkCudaErrors(cudaDeviceSynchronize());
 
 	// 월드 + 카메라를 GPU 메모리에 생성
-	// 최대 구체 수: 22*22(소형) + 1(바닥) + 3(대형) = 488 (실제는 continue로 일부 제외)
-	int maxHittables = 22 * 22 + 1 + 3;
+	// 최대 잎(leaf) 수는 가장 무거운 두 장면을 모두 수용해야 한다:
+	//   scene 0 (bouncing): 22*22(소형) + 1(바닥) + 3(대형) = 488 (continue로 일부 제외)
+	//   scene 9 (final)    : 400(바닥 상자) + 10(기타 오브젝트) = 410
+	// (scene 9의 1000개 구 클러스터는 "소유 HittableList" 안에 있어 list[]에 들어가지 않음)
+	int maxHittables = 512;
 	Hittable** list;
 	checkCudaErrors(cudaMalloc((void**)&list, maxHittables * sizeof(Hittable*)));
 	Hittable** world;
@@ -561,7 +648,7 @@ int main()
 	checkCudaErrors(cudaMallocManaged((void**)&d_numNodes, sizeof(int)));
 	*d_numNodes = 0;
 
-	// === 이미지 텍스처 업로드 (scene 2에서만) ===
+	// === 이미지 텍스처 업로드 (scene 2 / scene 9에서 사용) ===
 	// 호스트에서 stb_image로 디코딩 → 디바이스 글로벌 메모리로 업로드.
 	// RtwImage 소멸자가 디바이스 버퍼를 해제하므로, 렌더가 끝날 때까지
 	// 살아 있도록 main 스코프에 둔다. 파일이 없으면 DeviceData()==nullptr →
@@ -569,7 +656,7 @@ int main()
 	RtwImage earthImage;
 	const unsigned char* earthData = nullptr;
 	int earthW = 0, earthH = 0;
-	if (sceneId == 2)
+	if (sceneId == 2 || sceneId == 9)
 	{
 		earthImage.Load("earthmap.jpg");
 		earthData = earthImage.DeviceData();

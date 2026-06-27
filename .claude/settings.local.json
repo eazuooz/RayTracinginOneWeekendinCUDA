@@ -36,7 +36,10 @@
       "PowerShell($vcvars = \"C:\\\\Program Files\\\\Microsoft Visual Studio\\\\2022\\\\Community\\\\VC\\\\Auxiliary\\\\Build\\\\vcvars64.bat\"; cmd /c \"`\"$vcvars`\" && msbuild D:\\\\Github\\\\RayTracinginOneWeekendinCUDA\\\\RayTracinginOneWeekendinCUDA.sln /p:Configuration=Debug /p:Platform=x64 /v:minimal /nologo\")",
       "Bash(python -c \"import sys\")",
       "Bash(which magick *)",
-      "PowerShell($vcvars = \"C:\\\\Program Files\\\\Microsoft Visual Studio\\\\2022\\\\Community\\\\VC\\\\Auxiliary\\\\Build\\\\vcvars64.bat\"; cmd /c \"`\"$vcvars`\" && msbuild D:\\\\Github\\\\RayTracinginOneWeekendinCUDA\\\\RayTracinginOneWeekendinCUDA.sln /p:Configuration=Debug /p:Platform=x64 /v:minimal /nologo\" 2>&1 | Select-Object -Last 40)"
+      "PowerShell($vcvars = \"C:\\\\Program Files\\\\Microsoft Visual Studio\\\\2022\\\\Community\\\\VC\\\\Auxiliary\\\\Build\\\\vcvars64.bat\"; cmd /c \"`\"$vcvars`\" && msbuild D:\\\\Github\\\\RayTracinginOneWeekendinCUDA\\\\RayTracinginOneWeekendinCUDA.sln /p:Configuration=Debug /p:Platform=x64 /v:minimal /nologo\" 2>&1 | Select-Object -Last 40)",
+      "Bash(find . -iname \"earthmap.jpg\")",
+      "Bash(ls RayTracinginOneWeekend/*.jpg)",
+      "PowerShell($vcvars = \"C:\\\\Program Files\\\\Microsoft Visual Studio\\\\2022\\\\Community\\\\VC\\\\Auxiliary\\\\Build\\\\vcvars64.bat\"; cmd /c \"`\"$vcvars`\" && msbuild D:\\\\Github\\\\RayTracinginOneWeekendinCUDA\\\\RayTracinginOneWeekendinCUDA.sln /p:Configuration=Debug /p:Platform=x64 /v:minimal /nologo\" 2>&1 | Select-String -Pattern \"error|took|Done|seconds|어셈블리|복사\" | Select-Object -Last 25)"
     ]
   }
 }
