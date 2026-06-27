@@ -42,8 +42,10 @@ public:
 		double aperture,
 		double focusDist,
 		double time0 = 0.0,
-		double time1 = 0.0)
+		double time1 = 0.0,
+		Color background = Color(0.70, 0.80, 1.00))
 	{
+		mBackground = background;
 		mTime0 = time0;
 		mTime1 = time1;
 		mLensRadius = aperture / 2.0;
@@ -82,7 +84,13 @@ public:
 			time);
 	}
 
+	// === The Next Week Chapter 7: 장면 배경색 ===
+	// 레이가 아무것도 맞추지 못했을 때 반환할 색. 빛 장면(코넬 박스 등)은
+	// 검정(0,0,0)을 주어 광원만이 유일한 빛이 되게 한다.
+	__device__ const Color& Background() const { return mBackground; }
+
 private:
+	Color mBackground;
 	Vector3 mOrigin;
 	Vector3 mLowerLeftCorner;
 	Vector3 mHorizontal;

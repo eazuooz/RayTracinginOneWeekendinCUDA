@@ -29,7 +29,8 @@
       "PowerShell(Push-Location *)",
       "Bash(cd \"C:/Users/1/.claude/projects/D--Github-RayTracinginOneWeekendinCUDA/memory\")",
       "Bash(cat MEMORY.md)",
-      "Bash(python -c ' *)"
+      "Bash(python -c ' *)",
+      "PowerShell(Get-Process *)"
     ]
   }
 }

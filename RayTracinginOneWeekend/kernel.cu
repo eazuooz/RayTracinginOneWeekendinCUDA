@@ -49,38 +49,50 @@ void CheckCuda(cudaError_t result, char const* const func, const char* const fil
 //
 // GPU에서 재귀 대신 루프(최대 50회)로 레이를 추적한다.
 // 매 반복마다 재질의 Scatter 함수로 감쇠 색상과 새 레이를 얻는다.
-__device__ Color RayColor(const Ray& r, Hittable** world, curandState* randState)
+// === The Next Week Chapter 7: 배경색 + 발광 재질 ===
+// 원서의 재귀 ray_color를 반복(iterative)으로 푼 형태에 방출광을 더한다.
+//
+// 재귀식:  result = emit_0 + atten_0*(emit_1 + atten_1*(emit_2 + ...))
+// 이를 누적변수 두 개로 펼친다:
+//   throughput  : 지금까지 곱해진 감쇠(누적 반사율)
+//   accumulated : 지금까지 모은 방출광의 합
+//
+// 더 이상 산란하지 않으면(빛이거나 흡수) 지금까지 모은 색을 반환하고,
+// 아무것도 맞추지 못하면 배경색을 throughput에 실어 더한 뒤 반환한다.
+// (background가 (0,0,0)이면 장면의 유일한 빛은 발광 재질뿐이다.)
+__device__ Color RayColor(const Ray& r, const Color& background, Hittable** world, curandState* randState)
 {
 	Ray currentRay = r;
-	Color currentAttenuation(1.0, 1.0, 1.0);
+	Color throughput(1.0, 1.0, 1.0);
+	Color accumulated(0.0, 0.0, 0.0);
 
 	for (int i = 0; i < 50; i++)
 	{
 		HitRecord rec;
-		if ((*world)->Hit(currentRay, 0.001, DBL_MAX, rec))
+		if (!(*world)->Hit(currentRay, 0.001, DBL_MAX, rec))
 		{
-			Ray scattered;
-			Color attenuation;
-			if (rec.MaterialPtr->Scatter(currentRay, rec, attenuation, scattered, randState))
-			{
-				currentAttenuation = currentAttenuation * attenuation;
-				currentRay = scattered;
-			}
-			else
-			{
-				return Color(0.0, 0.0, 0.0);
-			}
+			// 아무것도 안 맞음 → 배경색
+			accumulated += throughput * background;
+			return accumulated;
 		}
-		else
+
+		// 방출광 누적(비발광 재질은 검정이라 영향 없음)
+		Color emission = rec.MaterialPtr->Emitted(rec.U, rec.V, rec.P);
+		accumulated += throughput * emission;
+
+		Ray scattered;
+		Color attenuation;
+		if (!rec.MaterialPtr->Scatter(currentRay, rec, attenuation, scattered, randState))
 		{
-			Vector3 unitDirection = UnitVector(currentRay.Direction());
-			double t = 0.5 * (unitDirection.Y() + 1.0);
-			Color c = (1.0 - t) * Color(1.0, 1.0, 1.0) + t * Color(0.5, 0.7, 1.0);
-			return currentAttenuation * c;
+			// 산란 안 함(빛/흡수) → 지금까지 모은 색 반환
+			return accumulated;
 		}
+
+		throughput = throughput * attenuation;
+		currentRay = scattered;
 	}
 
-	return Color(0.0, 0.0, 0.0);
+	return accumulated;
 }
 
 // 월드 생성용 cuRAND 초기화 (단일 스레드)
@@ -118,12 +130,15 @@ __global__ void Render(
 	curandState localRandState = randState[pixelIndex];
 	Color col(0.0, 0.0, 0.0);
 
+	// 장면 배경색(빛 장면은 검정). 카메라에 저장해 둔 값을 읽는다.
+	Color background = (*camera)->Background();
+
 	for (int s = 0; s < numSamples; s++)
 	{
 		double u = double(i + curand_uniform(&localRandState)) / double(maxX);
 		double v = double(j + curand_uniform(&localRandState)) / double(maxY);
 		Ray r = (*camera)->GetRay(u, v, &localRandState);
-		col += RayColor(r, world, &localRandState);
+		col += RayColor(r, background, world, &localRandState);
 	}
 
 	randState[pixelIndex] = localRandState;
@@ -148,6 +163,8 @@ __global__ void Render(
 //   2: earth             — 이미지 텍스처(지구 맵)를 입힌 구 1개
 //   3: perlin_spheres    — 펄린 노이즈(대리석) 텍스처 구 2개
 //   4: quads             — 5색 사각형(평행사변형) 장면
+//   5: simple_light      — 펄린 구 + 사각형/구 광원 (배경 검정)
+//   6: cornell_box       — 빈 코넬 박스 (천장 광원, 배경 검정)
 //
 // earthData/earthW/earthH: 호스트가 stb_image로 로드해 디바이스에 올린
 // RGB 바이트 버퍼와 크기(scene 2에서만 사용). 로드 실패 시 nullptr → 청록색.
@@ -171,6 +188,8 @@ __global__ void CreateWorld(
 		double distToFocus = 10.0;
 		double shutterOpen = 0.0;
 		double shutterClose = 0.0;
+		// 기본 배경은 푸르스름한 흰색(하늘). 빛 장면(5,6)은 검정으로 덮어쓴다.
+		Color background(0.70, 0.80, 1.00);
 
 		if (sceneId == 0)
 		{
@@ -273,7 +292,7 @@ __global__ void CreateWorld(
 			vfov = 20.0;
 			aperture = 0.0;
 		}
-		else
+		else if (sceneId == 4)
 		{
 			// === quads: 5색 사각형(평행사변형) 장면 (원서 Listing 54) ===
 			// 두 번째 프리미티브 Quad를 시연. 각 면을 다른 색 Lambertian으로.
@@ -292,6 +311,48 @@ __global__ void CreateWorld(
 			// 이라 카메라 aspect도 그에 맞춰진다(가로로 조금 넓게 보임).
 			lookfrom = Vector3(0.0, 0.0, 9.0);
 			vfov = 80.0;
+			aperture = 0.0;
+		}
+		else if (sceneId == 5)
+		{
+			// === simple_light: 펄린 구 + 사각형 광원 + 구 광원 (원서 Listing 59/60) ===
+			// 배경이 검정이라, 장면의 유일한 빛은 발광 재질(DiffuseLight)뿐이다.
+			Texture* pertext = new NoiseTexture(4.0, &localRandState);
+			list[i++] = new Sphere(Vector3(0.0, -1000.0, 0.0), 1000.0, new Lambertian(pertext));
+			list[i++] = new Sphere(Vector3(0.0, 2.0, 0.0), 2.0, new Lambertian(pertext));
+
+			// (4,4,4): (1,1,1)보다 밝아야 주변을 비출 수 있다.
+			Material* diffLight = new DiffuseLight(Color(4.0, 4.0, 4.0));
+			list[i++] = new Sphere(Vector3(0.0, 7.0, 0.0), 2.0, diffLight);            // 구 광원
+			list[i++] = new Quad(Vector3(3.0, 1.0, -2.0),
+				Vector3(2.0, 0.0, 0.0), Vector3(0.0, 2.0, 0.0), diffLight);            // 사각형 광원
+
+			background = Color(0.0, 0.0, 0.0);
+			lookfrom = Vector3(26.0, 3.0, 6.0);
+			lookat = Vector3(0.0, 2.0, 0.0);
+			vfov = 20.0;
+			aperture = 0.0;
+		}
+		else
+		{
+			// === cornell_box: 빈 코넬 박스 (원서 Listing 61) ===
+			// 5개 벽 + 천장 광원. 확산 표면 간 빛 상호작용의 고전 장면.
+			Material* red = new Lambertian(Color(0.65, 0.05, 0.05));
+			Material* white = new Lambertian(Color(0.73, 0.73, 0.73));
+			Material* green = new Lambertian(Color(0.12, 0.45, 0.15));
+			Material* light = new DiffuseLight(Color(15.0, 15.0, 15.0));
+
+			list[i++] = new Quad(Vector3(555, 0, 0), Vector3(0, 555, 0), Vector3(0, 0, 555), green);
+			list[i++] = new Quad(Vector3(0, 0, 0), Vector3(0, 555, 0), Vector3(0, 0, 555), red);
+			list[i++] = new Quad(Vector3(343, 554, 332), Vector3(-130, 0, 0), Vector3(0, 0, -105), light);
+			list[i++] = new Quad(Vector3(0, 0, 0), Vector3(555, 0, 0), Vector3(0, 0, 555), white);
+			list[i++] = new Quad(Vector3(555, 555, 555), Vector3(-555, 0, 0), Vector3(0, 0, -555), white);
+			list[i++] = new Quad(Vector3(0, 0, 555), Vector3(555, 0, 0), Vector3(0, 555, 0), white);
+
+			background = Color(0.0, 0.0, 0.0);
+			lookfrom = Vector3(278.0, 278.0, -800.0);
+			lookat = Vector3(278.0, 278.0, 0.0);
+			vfov = 40.0;
 			aperture = 0.0;
 		}
 
@@ -316,7 +377,8 @@ __global__ void CreateWorld(
 			aperture,
 			distToFocus,
 			shutterOpen,
-			shutterClose);
+			shutterClose,
+			background);
 	}
 }
 
@@ -349,18 +411,23 @@ int main()
 {
 	int imageWidth = 1440;
 	int imageHeight = 720;
-	int numSamples = 10;
 
 	int blockWidth = 8;
 	int blockHeight = 8;
 
-	// === 렌더링할 장면 선택 (The Next Week Ch.4 텍스처 매핑) ===
+	// === 렌더링할 장면 선택 (The Next Week Ch.4~7) ===
 	//   0: bouncing_spheres  — 바닥이 체커 텍스처인 최종 랜덤 구 장면
 	//   1: checkered_spheres — 체커 구 2개
 	//   2: earth             — 지구 이미지 텍스처 구 (earthmap.jpg 필요)
 	//   3: perlin_spheres    — 펄린 노이즈(대리석) 구 2개
 	//   4: quads             — 5색 사각형(평행사변형) 장면
-	int sceneId = 4;
+	//   5: simple_light      — 사각형/구 광원 (배경 검정)
+	//   6: cornell_box       — 빈 코넬 박스 (천장 광원, 배경 검정)
+	int sceneId = 6;
+
+	// 픽셀당 샘플 수. 빛 장면(5,6)은 작은 광원 때문에 노이즈가 심하므로
+	// 샘플을 크게 잡는다(원서도 100~200 사용).
+	int numSamples = (sceneId == 5 || sceneId == 6) ? 200 : 10;
 
 	// GPU 스택 크기 증가
 	// MovingSphere 추가로 가상함수 깊이가 늘어 스택 소비 증가 → 32768로 확장.
@@ -473,9 +540,16 @@ int main()
 			size_t pixelIndex = j * imageWidth + i;
 			Color col = frameBuffer[pixelIndex];
 
-			int ir = int(255.99 * col.X());
-			int ig = int(255.99 * col.Y());
-			int ib = int(255.99 * col.Z());
+			// [0,1)로 클램프 후 [0,255]로 변환.
+			// 발광 재질(빛)은 색이 1.0을 넘을 수 있어, 클램프하지 않으면
+			// PPM에 255를 초과하는 값(예: 511)이 찍혀 파일이 깨진다.
+			double r = col.X() < 0.0 ? 0.0 : (col.X() > 0.999 ? 0.999 : col.X());
+			double g = col.Y() < 0.0 ? 0.0 : (col.Y() > 0.999 ? 0.999 : col.Y());
+			double b = col.Z() < 0.0 ? 0.0 : (col.Z() > 0.999 ? 0.999 : col.Z());
+
+			int ir = int(256.0 * r);
+			int ig = int(256.0 * g);
+			int ib = int(256.0 * b);
 
 			outFile << ir << " " << ig << " " << ib << "\n";
 		}
