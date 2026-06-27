@@ -30,7 +30,12 @@
       "Bash(cd \"C:/Users/1/.claude/projects/D--Github-RayTracinginOneWeekendinCUDA/memory\")",
       "Bash(cat MEMORY.md)",
       "Bash(python -c ' *)",
-      "PowerShell(Get-Process *)"
+      "PowerShell(Get-Process *)",
+      "PowerShell($lines = Get-Content \"D:\\\\Github\\\\RayTracinginOneWeekendinCUDA\\\\RayTracinginOneWeekend\\\\kernel.cu\"; $l = $lines[336]; [System.Text.Encoding]::UTF8.GetBytes\\($l\\) | ForEach-Object { $_.ToString\\('X2'\\) } | Select-Object -First 12)",
+      "PowerShell($lines = Get-Content \"D:\\\\Github\\\\RayTracinginOneWeekendinCUDA\\\\RayTracinginOneWeekend\\\\kernel.cu\"; foreach \\($idx in 336,337,338,340\\) { $l = $lines[$idx]; $b = [System.Text.Encoding]::UTF8.GetBytes\\($l\\); $tabs = 0; foreach\\($x in $b\\){ if\\($x -eq 9\\){$tabs++} else {break} }; Write-Output \\(\"line $\\($idx+1\\): $tabs leading tabs\"\\) })",
+      "PowerShell($vcvars = \"C:\\\\Program Files\\\\Microsoft Visual Studio\\\\2022\\\\Community\\\\VC\\\\Auxiliary\\\\Build\\\\vcvars64.bat\"; cmd /c \"`\"$vcvars`\" && msbuild D:\\\\Github\\\\RayTracinginOneWeekendinCUDA\\\\RayTracinginOneWeekendinCUDA.sln /p:Configuration=Debug /p:Platform=x64 /v:minimal /nologo\")",
+      "Bash(python -c \"import sys\")",
+      "Bash(which magick *)"
     ]
   }
 }

@@ -16,6 +16,7 @@
 #include "Sphere.h"
 #include "MovingSphere.h"
 #include "Quad.h"
+#include "Instance.h"
 #include "Texture.h"
 #include "Material.h"
 #include "Metal.h"
@@ -165,6 +166,7 @@ __global__ void Render(
 //   4: quads             — 5색 사각형(평행사변형) 장면
 //   5: simple_light      — 펄린 구 + 사각형/구 광원 (배경 검정)
 //   6: cornell_box       — 빈 코넬 박스 (천장 광원, 배경 검정)
+//   7: cornell_box(상자2) — 회전·이동시킨 직육면체 2개 추가 (인스턴스 시연)
 //
 // earthData/earthW/earthH: 호스트가 stb_image로 로드해 디바이스에 올린
 // RGB 바이트 버퍼와 크기(scene 2에서만 사용). 로드 실패 시 nullptr → 청록색.
@@ -333,7 +335,7 @@ __global__ void CreateWorld(
 			vfov = 20.0;
 			aperture = 0.0;
 		}
-		else
+		else if (sceneId == 6)
 		{
 			// === cornell_box: 빈 코넬 박스 (원서 Listing 61) ===
 			// 5개 벽 + 천장 광원. 확산 표면 간 빛 상호작용의 고전 장면.
@@ -348,6 +350,42 @@ __global__ void CreateWorld(
 			list[i++] = new Quad(Vector3(0, 0, 0), Vector3(555, 0, 0), Vector3(0, 0, 555), white);
 			list[i++] = new Quad(Vector3(555, 555, 555), Vector3(-555, 0, 0), Vector3(0, 0, -555), white);
 			list[i++] = new Quad(Vector3(0, 0, 555), Vector3(555, 0, 0), Vector3(0, 555, 0), white);
+
+			background = Color(0.0, 0.0, 0.0);
+			lookfrom = Vector3(278.0, 278.0, -800.0);
+			lookat = Vector3(278.0, 278.0, 0.0);
+			vfov = 40.0;
+			aperture = 0.0;
+		}
+		else
+		{
+			// === cornell_box (두 회전 상자): 인스턴스 시연 (원서 Listing 62~70) ===
+			// scene 6과 같은 5벽+광원에, 회전·이동시킨 직육면체 2개를 추가한다.
+			//   키 큰 상자  : 15° 회전 후 (265,0,295)로 이동
+			//   키 작은 상자: -18° 회전 후 (130,0,65)로 이동
+			Material* red = new Lambertian(Color(0.65, 0.05, 0.05));
+			Material* white = new Lambertian(Color(0.73, 0.73, 0.73));
+			Material* green = new Lambertian(Color(0.12, 0.45, 0.15));
+			Material* light = new DiffuseLight(Color(15.0, 15.0, 15.0));
+
+			list[i++] = new Quad(Vector3(555, 0, 0), Vector3(0, 555, 0), Vector3(0, 0, 555), green);
+			list[i++] = new Quad(Vector3(0, 0, 0), Vector3(0, 555, 0), Vector3(0, 0, 555), red);
+			list[i++] = new Quad(Vector3(343, 554, 332), Vector3(-130, 0, 0), Vector3(0, 0, -105), light);
+			list[i++] = new Quad(Vector3(0, 0, 0), Vector3(555, 0, 0), Vector3(0, 0, 555), white);
+			list[i++] = new Quad(Vector3(555, 555, 555), Vector3(-555, 0, 0), Vector3(0, 0, -555), white);
+			list[i++] = new Quad(Vector3(0, 0, 555), Vector3(555, 0, 0), Vector3(0, 555, 0), white);
+
+			// 키 큰 상자 (원서 Listing 70). MakeBox → RotateY → Translate 로 감싼다.
+			Hittable* box1 = MakeBox(Point3(0, 0, 0), Point3(165, 330, 165), white);
+			box1 = new RotateY(box1, 15.0);
+			box1 = new Translate(box1, Vector3(265, 0, 295));
+			list[i++] = box1;
+
+			// 키 작은 상자
+			Hittable* box2 = MakeBox(Point3(0, 0, 0), Point3(165, 165, 165), white);
+			box2 = new RotateY(box2, -18.0);
+			box2 = new Translate(box2, Vector3(130, 0, 65));
+			list[i++] = box2;
 
 			background = Color(0.0, 0.0, 0.0);
 			lookfrom = Vector3(278.0, 278.0, -800.0);
@@ -423,11 +461,12 @@ int main()
 	//   4: quads             — 5색 사각형(평행사변형) 장면
 	//   5: simple_light      — 사각형/구 광원 (배경 검정)
 	//   6: cornell_box       — 빈 코넬 박스 (천장 광원, 배경 검정)
-	int sceneId = 6;
+	//   7: cornell_box(상자2) — 회전·이동시킨 직육면체 2개를 넣은 코넬 박스
+	int sceneId = 7;
 
-	// 픽셀당 샘플 수. 빛 장면(5,6)은 작은 광원 때문에 노이즈가 심하므로
+	// 픽셀당 샘플 수. 빛 장면(5,6,7)은 작은 광원 때문에 노이즈가 심하므로
 	// 샘플을 크게 잡는다(원서도 100~200 사용).
-	int numSamples = (sceneId == 5 || sceneId == 6) ? 200 : 10;
+	int numSamples = (sceneId == 5 || sceneId == 6 || sceneId == 7) ? 200 : 10;
 
 	// GPU 스택 크기 증가
 	// MovingSphere 추가로 가상함수 깊이가 늘어 스택 소비 증가 → 32768로 확장.

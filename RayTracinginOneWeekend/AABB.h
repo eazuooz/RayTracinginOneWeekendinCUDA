@@ -120,4 +120,18 @@ private:
     }
 };
 
+// === The Next Week Chapter 8: Instances ===
+// AABB를 offset만큼 평행이동한다. Translate가 자식의 경계 상자를 월드 공간으로
+// 옮길 때 쓴다(상자를 옮겨 두지 않으면 BVH/슬랩 검사가 엉뚱한 곳을 보고 레이를
+// 조기 기각해 버린다). 세 축 구간을 각각 Interval operator+ 로 민다.
+__host__ __device__ inline Aabb operator+(const Aabb& bbox, const Vector3& offset)
+{
+    return Aabb(bbox.X + offset.X(), bbox.Y + offset.Y(), bbox.Z + offset.Z());
+}
+
+__host__ __device__ inline Aabb operator+(const Vector3& offset, const Aabb& bbox)
+{
+    return bbox + offset;
+}
+
 #endif

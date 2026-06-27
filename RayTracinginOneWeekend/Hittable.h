@@ -32,6 +32,13 @@ struct HitRecord
 class Hittable
 {
 public:
+    // === The Next Week Chapter 8: Instances ===
+    // 가상 소멸자. Translate/RotateY 인스턴스는 자신이 감싼 자식(Hittable*)을
+    // 소멸자에서 재귀적으로 delete 한다. 베이스 포인터(Hittable*)로 delete 할 때
+    // 파생 클래스(예: Translate→RotateY→HittableList→Quad들)의 소멸자가 제대로
+    // 연쇄 호출되려면 베이스에 가상 소멸자가 있어야 한다.
+    __device__ virtual ~Hittable() {}
+
     __device__ virtual bool Hit(
         const Ray& ray,
         double tMin,

@@ -61,4 +61,17 @@ struct Interval
     }
 };
 
+// === The Next Week Chapter 8: Instances ===
+// 구간을 displacement만큼 평행이동한다. Translate 인스턴스가 자식의 AABB를
+// 옮길 때, 각 축 구간을 이 연산으로 민다. (Aabb operator+ 가 축별로 호출)
+__host__ __device__ inline Interval operator+(const Interval& ival, double displacement)
+{
+    return Interval(ival.Min + displacement, ival.Max + displacement);
+}
+
+__host__ __device__ inline Interval operator+(double displacement, const Interval& ival)
+{
+    return ival + displacement;
+}
+
 #endif
