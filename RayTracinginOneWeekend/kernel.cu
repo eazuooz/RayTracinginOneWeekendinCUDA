@@ -5,6 +5,8 @@
 #include <iostream>
 #include <ctime>
 #include <cfloat>
+#include <cstdlib>
+#include <cstring>
 #include <fstream>
 #include <curand_kernel.h>
 
@@ -24,6 +26,7 @@
 #include "Dielectric.h"
 #include "Camera.h"
 #include "RtwImage.h"
+#include "MonteCarloDemo.h"
 
 // CUDA 에러 체크 매크로
 #define checkCudaErrors(val) CheckCuda((val), #val, __FILE__, __LINE__)
@@ -119,8 +122,15 @@ __global__ void RenderInit(int maxX, int maxY, curandState* randState)
 }
 
 // 렌더 커널: 안티앨리어싱 + 재질 기반 산란 + 피사계 심도
+//
+// === The Rest of Your Life Chapter 2: 층화 샘플링 (Stratified Samples / Jittering) ===
+// 픽셀을 sqrtSpp x sqrtSpp 격자로 나누고, 각 칸 안에서 무작위 위치를 하나씩 뽑는다.
+// 샘플이 픽셀 안에 고르게 퍼져서, 같은 샘플 수라도 물체 경계처럼 변화가 급한 곳이
+// 더 또렷해진다. bStratify=false면 예전처럼 픽셀 전체에서 순수 무작위로 뽑는다
+// (비교용). 스레드 하나가 픽셀 하나를 맡는 구조는 그대로라, 층화는 이 커널 안의
+// 이중 루프만 바꾸면 된다.
 __global__ void Render(
-	Vector3* frameBuffer, int maxX, int maxY, int numSamples,
+	Vector3* frameBuffer, int maxX, int maxY, int sqrtSpp, bool bStratify,
 	Camera** camera, Hittable** world, curandState* randState)
 {
 	int i = threadIdx.x + blockIdx.x * blockDim.x;
@@ -135,16 +145,37 @@ __global__ void Render(
 	// 장면 배경색(빛 장면은 검정). 카메라에 저장해 둔 값을 읽는다.
 	Color background = (*camera)->Background();
 
-	for (int s = 0; s < numSamples; s++)
+	// 격자 한 칸의 크기(픽셀 폭 = 1 기준)
+	double recipSqrtSpp = 1.0 / double(sqrtSpp);
+
+	for (int sj = 0; sj < sqrtSpp; sj++)
 	{
-		double u = double(i + curand_uniform(&localRandState)) / double(maxX);
-		double v = double(j + curand_uniform(&localRandState)) / double(maxY);
-		Ray r = (*camera)->GetRay(u, v, &localRandState);
-		col += RayColor(r, background, world, &localRandState);
+		for (int si = 0; si < sqrtSpp; si++)
+		{
+			// 픽셀 안의 샘플 위치 (px, py) ∈ [0,1)^2
+			double px, py;
+			if (bStratify)
+			{
+				// (si, sj) 칸 안에서만 무작위 (원서 sample_square_stratified)
+				px = (si + curand_uniform(&localRandState)) * recipSqrtSpp;
+				py = (sj + curand_uniform(&localRandState)) * recipSqrtSpp;
+			}
+			else
+			{
+				// 픽셀 전체에서 무작위 (층화 없음)
+				px = curand_uniform(&localRandState);
+				py = curand_uniform(&localRandState);
+			}
+
+			double u = (double(i) + px) / double(maxX);
+			double v = (double(j) + py) / double(maxY);
+			Ray r = (*camera)->GetRay(u, v, &localRandState);
+			col += RayColor(r, background, world, &localRandState);
+		}
 	}
 
 	randState[pixelIndex] = localRandState;
-	col = col / double(numSamples);
+	col = col / double(sqrtSpp * sqrtSpp);
 
 	// 감마 보정 (gamma = 2.0)
 	col[0] = sqrt(col[0]);
@@ -170,6 +201,7 @@ __global__ void Render(
 //   7: cornell_box(상자2) — 회전·이동시킨 직육면체 2개 추가 (인스턴스 시연)
 //   8: cornell_smoke      — 두 상자를 연기/안개 볼륨으로 (ConstantMedium)
 //   9: final_scene        — 모든 기능을 모은 최종 장면 (원서 Listing 74)
+//  10: cornell_box(3권)   — The Rest of Your Life의 기준 코넬 박스 (600x600)
 //
 // earthData/earthW/earthH: 호스트가 stb_image로 로드해 디바이스에 올린
 // RGB 바이트 버퍼와 크기(scene 2에서만 사용). 로드 실패 시 nullptr → 청록색.
@@ -433,7 +465,7 @@ __global__ void CreateWorld(
 			vfov = 40.0;
 			aperture = 0.0;
 		}
-		else
+		else if (sceneId == 9)
 		{
 			// === final_scene: 모든 새 기능을 테스트하는 최종 장면 (원서 Listing 74) ===
 			// 전체를 덮는 크고 얇은 안개 + 청색 표면하부 산란 구(유전체 내부의 볼륨)를
@@ -515,6 +547,46 @@ __global__ void CreateWorld(
 			shutterOpen = 0.0;     // 모션 블러 셔터 구간 (이동 구와 일치)
 			shutterClose = 1.0;
 		}
+		else if (sceneId == 10)
+		{
+			// === The Rest of Your Life: 코넬 박스 다시 보기 (3권 2장 "Cornell box, revisited") ===
+			// 2권 scene 7과 같은 방이지만, 3권은 벽 사각형의 시작 모서리/변 방향과 광원
+			// 위치를 조금 다르게 잡는다(광원: 천장 가운데 x 213~343, z 227~332).
+			// 3권 전체가 이 장면을 기준으로 노이즈를 비교하므로, 이미지도 원서처럼
+			// 600x600 정사각형으로 렌더한다(main 참고).
+			Material* red = new Lambertian(Color(0.65, 0.05, 0.05));
+			Material* white = new Lambertian(Color(0.73, 0.73, 0.73));
+			Material* green = new Lambertian(Color(0.12, 0.45, 0.15));
+			Material* light = new DiffuseLight(Color(15.0, 15.0, 15.0));
+
+			// 코넬 박스 벽 5개
+			list[i++] = new Quad(Point3(555, 0, 0), Vector3(0, 0, 555), Vector3(0, 555, 0), green);
+			list[i++] = new Quad(Point3(0, 0, 555), Vector3(0, 0, -555), Vector3(0, 555, 0), red);
+			list[i++] = new Quad(Point3(0, 555, 0), Vector3(555, 0, 0), Vector3(0, 0, 555), white);
+			list[i++] = new Quad(Point3(0, 0, 555), Vector3(555, 0, 0), Vector3(0, 0, -555), white);
+			list[i++] = new Quad(Point3(555, 0, 555), Vector3(-555, 0, 0), Vector3(0, 555, 0), white);
+
+			// 천장 광원
+			list[i++] = new Quad(Point3(213, 554, 227), Vector3(130, 0, 0), Vector3(0, 0, 105), light);
+
+			// 키 큰 상자
+			Hittable* box1 = MakeBox(Point3(0, 0, 0), Point3(165, 330, 165), white);
+			box1 = new RotateY(box1, 15.0);
+			box1 = new Translate(box1, Vector3(265, 0, 295));
+			list[i++] = box1;
+
+			// 키 작은 상자
+			Hittable* box2 = MakeBox(Point3(0, 0, 0), Point3(165, 165, 165), white);
+			box2 = new RotateY(box2, -18.0);
+			box2 = new Translate(box2, Vector3(130, 0, 65));
+			list[i++] = box2;
+
+			background = Color(0.0, 0.0, 0.0);
+			lookfrom = Vector3(278.0, 278.0, -800.0);
+			lookat = Vector3(278.0, 278.0, 0.0);
+			vfov = 40.0;
+			aperture = 0.0;
+		}
 
 		*randState = localRandState;
 		*outCount = i;  // 실제 배치된 프리미티브 수 (FreeWorld에서 사용)
@@ -567,15 +639,12 @@ __global__ void FreeWorld(
 	}
 }
 
-int main()
+// CreateWorld가 아는 가장 큰 장면 번호
+static const int kMaxSceneId = 10;
+
+int main(int argc, char** argv)
 {
-	int imageWidth = 1440;
-	int imageHeight = 720;
-
-	int blockWidth = 8;
-	int blockHeight = 8;
-
-	// === 렌더링할 장면 선택 (The Next Week Ch.4~10) ===
+	// === 렌더링할 장면 선택 ===
 	//   0: bouncing_spheres  — 바닥이 체커 텍스처인 최종 랜덤 구 장면
 	//   1: checkered_spheres — 체커 구 2개
 	//   2: earth             — 지구 이미지 텍스처 구 (earthmap.jpg 필요)
@@ -585,12 +654,84 @@ int main()
 	//   6: cornell_box       — 빈 코넬 박스 (천장 광원, 배경 검정)
 	//   7: cornell_box(상자2) — 회전·이동시킨 직육면체 2개를 넣은 코넬 박스
 	//   8: cornell_smoke      — 두 상자를 연기/안개 볼륨으로 (ConstantMedium)
-	//   9: final_scene        — 모든 기능을 모은 최종 장면 (원서 Listing 74)
-	int sceneId = 9;
+	//   9: final_scene        — 모든 기능을 모은 최종 장면 (2권 Listing 74)
+	//  10: cornell_box(3권)   — The Rest of Your Life의 기준 코넬 박스
+	int sceneId = 10;
+	int numSamples = -1;            // -1이면 아래에서 장면별 기본값을 쓴다
+	bool bStratify = true;          // 3권 2장: 픽셀 안 층화 샘플링
+	const char* outPath = "output.ppm";
 
-	// 픽셀당 샘플 수. 빛/볼륨 장면(5~9)은 작은 광원·산란 때문에 노이즈가 심하므로
-	// 샘플을 크게 잡는다(원서도 100~10000 사용). 최종 장면(9)은 무거워 100으로 둔다.
-	int numSamples = (sceneId == 9) ? 100 : ((sceneId >= 5 && sceneId <= 8) ? 200 : 10);
+	// === 명령행 옵션 (3권부터 추가) ===
+	// 인자 없이 실행하면(VS F5 / 빌드 후 이벤트) 위 기본값으로 output.ppm을 만든다.
+	//   --demo <이름>   몬테카를로 데모 실행 (MonteCarloDemo.cu, 렌더는 하지 않음)
+	//   --scene <번호>  렌더할 장면
+	//   --spp <수>      픽셀당 샘플 수 (층화 격자 때문에 제곱수로 내림)
+	//   --nostrat       층화 샘플링 끄기 (비교용)
+	//   --out <파일>    출력 PPM 경로
+	for (int a = 1; a < argc; a++)
+	{
+		if (strcmp(argv[a], "--demo") == 0 && a + 1 < argc)
+		{
+			if (!RunMonteCarloDemo(argv[a + 1]))
+			{
+				std::cerr << "Unknown demo: " << argv[a + 1] << "\n";
+				PrintMonteCarloDemoList();
+				return 1;
+			}
+			return 0;
+		}
+		else if (strcmp(argv[a], "--scene") == 0 && a + 1 < argc)
+		{
+			sceneId = atoi(argv[++a]);
+		}
+		else if (strcmp(argv[a], "--spp") == 0 && a + 1 < argc)
+		{
+			numSamples = atoi(argv[++a]);
+		}
+		else if (strcmp(argv[a], "--nostrat") == 0)
+		{
+			bStratify = false;
+		}
+		else if (strcmp(argv[a], "--out") == 0 && a + 1 < argc)
+		{
+			outPath = argv[++a];
+		}
+		else
+		{
+			std::cerr << "Unknown option: " << argv[a] << "\n";
+			return 1;
+		}
+	}
+
+	if (sceneId < 0 || sceneId > kMaxSceneId)
+	{
+		std::cerr << "Scene id must be 0.." << kMaxSceneId << "\n";
+		return 1;
+	}
+
+	// 3권 장면(10~)은 원서처럼 600x600 정사각형, 1·2권 장면은 기존 1440x720.
+	bool bBook3Scene = (sceneId >= 10);
+	int imageWidth = bBook3Scene ? 600 : 1440;
+	int imageHeight = bBook3Scene ? 600 : 720;
+
+	int blockWidth = 8;
+	int blockHeight = 8;
+
+	// 픽셀당 샘플 수 기본값. 빛/볼륨 장면(5~9)은 작은 광원·산란 때문에 노이즈가
+	// 심하므로 크게 잡는다. 최종 장면(9)은 무거워 100, 3권 코넬 박스는 원서 2장처럼 64.
+	if (numSamples <= 0)
+	{
+		if (bBook3Scene) numSamples = 64;
+		else if (sceneId == 9) numSamples = 100;
+		else if (sceneId >= 5) numSamples = 200;
+		else numSamples = 10;
+	}
+
+	// 층화 샘플링은 픽셀을 sqrtSpp x sqrtSpp 격자로 나누므로, 실제 샘플 수는
+	// 제곱수로 내림된다(원서 camera::initialize의 sqrt_spp와 같다).
+	int sqrtSpp = int(sqrt(double(numSamples)));
+	if (sqrtSpp < 1) sqrtSpp = 1;
+	numSamples = sqrtSpp * sqrtSpp;
 
 	// GPU 스택 크기 증가
 	// MovingSphere 추가로 가상함수 깊이가 늘어 스택 소비 증가 → 32768로 확장.
@@ -598,8 +739,9 @@ int main()
 	// 필요 없다(재귀로 두면 이 한도로도 일부 스레드에서 스택이 넘쳤다).
 	checkCudaErrors(cudaDeviceSetLimit(cudaLimitStackSize, 32768));
 
-	std::cerr << "Rendering a " << imageWidth << "x" << imageHeight
-		<< " image with " << numSamples << " samples per pixel "
+	std::cerr << "Rendering scene " << sceneId << ": " << imageWidth << "x" << imageHeight
+		<< " image with " << numSamples << " samples per pixel ("
+		<< (bStratify ? "stratified " : "random ") << sqrtSpp << "x" << sqrtSpp << ") "
 		<< "in " << blockWidth << "x" << blockHeight << " blocks.\n";
 
 	int numPixels = imageWidth * imageHeight;
@@ -684,7 +826,7 @@ int main()
 
 	Render<<<blocks, threads>>>(
 		frameBuffer, imageWidth, imageHeight,
-		numSamples, camera, world, randState);
+		sqrtSpp, bStratify, camera, world, randState);
 	checkCudaErrors(cudaGetLastError());
 	checkCudaErrors(cudaDeviceSynchronize());
 
@@ -693,7 +835,7 @@ int main()
 	std::cerr << "took " << timerSeconds << " seconds.\n";
 
 	// PPM 이미지 파일 저장
-	std::ofstream outFile("output.ppm");
+	std::ofstream outFile(outPath);
 	outFile << "P3\n" << imageWidth << " " << imageHeight << "\n255\n";
 
 	for (int j = imageHeight - 1; j >= 0; j--)
@@ -721,7 +863,7 @@ int main()
 		}
 	}
 	outFile.close();
-	std::cerr << "\nDone. Saved to output.ppm\n";
+	std::cerr << "\nDone. Saved to " << outPath << "\n";
 
 	// GPU 메모리 해제
 	FreeWorld<<<1, 1>>>(list, numHittables, bvhNodes, numNodes, world, camera);
