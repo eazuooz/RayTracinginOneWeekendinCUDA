@@ -93,6 +93,8 @@ copy /Y "$(ProjectDir)output.ppm" "$(SolutionDir)output.ppm"</Command>
     <CudaCompile Include="kernel.cu" />
     <!-- 3권 몬테카를로 데모(파이 추정/적분 실험)용 별도 번역 단위 -->
     <CudaCompile Include="MonteCarloDemo.cu" />
+    <!-- thrust 병렬 기본 연산 래퍼 (무거운 thrust 헤더를 이 파일에서만 컴파일) -->
+    <CudaCompile Include="DemoThrust.cu" />
   </ItemGroup>
   <ItemGroup>
     <!-- stb_image 구현부: 호스트 컴파일러(cl)로만 빌드 (cudafe++ 우회) -->
@@ -109,6 +111,7 @@ copy /Y "$(ProjectDir)output.ppm" "$(SolutionDir)output.ppm"</Command>
     <ClInclude Include="Material.h" />
     <ClInclude Include="Metal.h" />
     <ClInclude Include="MonteCarloDemo.h" />
+    <ClInclude Include="DemoThrust.h" />
     <ClInclude Include="Perlin.h" />
     <ClInclude Include="Quad.h" />
     <ClInclude Include="Ray.h" />
