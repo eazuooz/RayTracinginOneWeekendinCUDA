@@ -832,6 +832,94 @@ static void DemoLambert()
 }
 
 // ─────────────────────────────────────────────────────────────────────
+// 6장: 중요도 샘플링 가지고 놀기 — 화로 테스트(white furnace test)
+// ─────────────────────────────────────────────────────────────────────
+// 사방에서 밝기 1의 빛이 들어오는 "화로" 안에 알베도 A인 표면을 두면, 에너지 보존상
+// 반사되어 나오는 빛은 정확히 A여야 한다. 산란 한 번의 추정값
+//   g = A * pScatter(w) * L / pdf(w),   w ~ (방향을 실제로 뽑은 분포)
+// 의 평균이 A인지 본다. pdf에는 반드시 "방향을 실제로 뽑은 분포의 밀도"를 넣어야 한다.
+// 뽑는 분포는 그대로 두고 pdf 값만 바꾸면(원서 6장 균일 PDF 절의 코드 그대로) 편향된다.
+enum FurnaceCaseId
+{
+	kFurnaceCosCos = 0,        // cos 분포로 뽑고 pdf = cos/pi            → A
+	kFurnaceUniformUniform,    // 반구 균일로 뽑고 pdf = 1/2pi            → A (노이즈 증가)
+	kFurnaceCosUniform,        // cos 분포로 뽑고 pdf = 1/2pi (어긋남)    → 4A/3 (편향)
+	kFurnaceHemiMaterial,      // pScatter = pdf = 1/2pi (다른 재질)      → A
+	kFurnaceCaseCount
+};
+
+__global__ void FurnaceKernel(
+	unsigned long long seed, int caseId, double albedo, int numThreads, int samplesPerThread,
+	double* partialSums, double* partialSumSquares)
+{
+	int id = blockIdx.x * blockDim.x + threadIdx.x;
+	if (id >= numThreads) return;
+
+	DemoRng rng;
+	curand_init(seed, id, 0, &rng);
+
+	const double uniformPdf = 1.0 / (2.0 * kPi);
+	bool bCosSampled = (caseId == kFurnaceCosCos || caseId == kFurnaceCosUniform);
+
+	double sum = 0.0;
+	double sumSq = 0.0;
+	for (int k = 0; k < samplesPerThread; k++)
+	{
+		Vector3 w = ScatterDirection(bCosSampled ? kGenOnSphere : kGenHemisphere, &rng);
+		double cosTheta = w.Z();
+
+		double pScatter = (caseId == kFurnaceHemiMaterial) ? uniformPdf : cosTheta / kPi;
+		double pdf = (caseId == kFurnaceCosCos) ? cosTheta / kPi : uniformPdf;
+
+		double g = (pdf > 0.0) ? albedo * pScatter * 1.0 / pdf : 0.0;   // 들어오는 빛 L = 1
+		sum += g;
+		sumSq += g * g;
+	}
+	partialSums[id] = sum;
+	partialSumSquares[id] = sumSq;
+}
+
+static void DemoFurnace()
+{
+	const double albedo = 0.73;          // 코넬 박스 흰 벽과 같은 값
+	const int numThreads = 1 << 20;
+	const int samplesPerThread = 8;
+	const double n = double(numThreads) * double(samplesPerThread);
+	const int threadsPerBlock = 256;
+
+	const char* names[kFurnaceCaseCount] =
+	{
+		"cos-sampled,     pdf = cos/pi",
+		"uniform-sampled, pdf = 1/2pi",
+		"cos-sampled,     pdf = 1/2pi  (book listing)",
+		"hemispherical material, pScatter = pdf = 1/2pi"
+	};
+	const double expected[kFurnaceCaseCount] = { albedo, albedo, albedo * 4.0 / 3.0, albedo };
+
+	double* dSums;
+	double* dSumSquares;
+	checkDemoErrors(cudaMalloc((void**)&dSums, numThreads * sizeof(double)));
+	checkDemoErrors(cudaMalloc((void**)&dSumSquares, numThreads * sizeof(double)));
+
+	printf("[furnace] white furnace test: albedo A = %.2f, incoming radiance L = 1 from every direction\n", albedo);
+	printf("%-48s  %10s  %10s  %14s\n", "case", "estimate", "expected", "stddev/sample");
+	for (int c = 0; c < kFurnaceCaseCount; c++)
+	{
+		FurnaceKernel<<<(numThreads + threadsPerBlock - 1) / threadsPerBlock, threadsPerBlock>>>(
+			900 + c, c, albedo, numThreads, samplesPerThread, dSums, dSumSquares);
+		checkDemoErrors(cudaGetLastError());
+
+		double mean = DeviceSum(dSums, numThreads) / n;
+		double meanSq = DeviceSum(dSumSquares, numThreads) / n;
+		double stddev = sqrt(fmax(0.0, meanSq - mean * mean));
+		printf("%-48s  %10.6f  %10.6f  %14.6f\n", names[c], mean, expected[c], stddev);
+	}
+
+	checkDemoErrors(cudaFree(dSums));
+	checkDemoErrors(cudaFree(dSumSquares));
+}
+
+// ─────────────────────────────────────────────────────────────────────
 // 진입점
 // ─────────────────────────────────────────────────────────────────────
 
@@ -867,6 +955,11 @@ bool RunMonteCarloDemo(const char* name)
 		DemoLambert();
 		return true;
 	}
+	if (strcmp(name, "furnace") == 0)
+	{
+		DemoFurnace();
+		return true;
+	}
 
 	return false;
 }
@@ -880,4 +973,5 @@ void PrintMonteCarloDemoList()
 	fprintf(stderr, "  importance ch.3  integrate x^2 with uniform/half-split/linear/quadratic PDFs\n");
 	fprintf(stderr, "  sphere     ch.4  integrate cos^2 over the unit sphere (rejection-sampled directions)\n");
 	fprintf(stderr, "  lambert    ch.5  Lambertian scattering PDF: normalization + cos(theta) histograms\n");
+	fprintf(stderr, "  furnace    ch.6  white furnace test of the f/p estimator for several sampling choices\n");
 }

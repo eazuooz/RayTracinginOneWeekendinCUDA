@@ -93,7 +93,24 @@ __device__ Color RayColor(const Ray& r, const Color& background, Hittable** worl
 			return accumulated;
 		}
 
-		throughput = throughput * attenuation;
+		// === The Rest of Your Life Chapter 6: 중요도 샘플링 계측 ===
+		// 몬테카를로 기본식 (적분 ≈ f(r)/p(r)의 평균)을 산란에 그대로 적용한다:
+		//   색_o = 방출 + 감쇠 * pScatter(방향) * 색_i / pdfValue(방향)
+		// 반복형이므로 "감쇠 * pScatter / pdfValue"를 throughput에 곱해 둔다.
+		// 지금은 산란 방향을 pScatter와 같은 분포로 뽑으므로 pdfValue = scatteringPdf,
+		// 둘이 약분되어 곱해지는 값은 결국 감쇠뿐이다(그림은 그대로여야 정상).
+		// ScatteringPdf를 정의하지 않은 재질(0을 돌려주는 Metal/Dielectric/Isotropic)은
+		// 원서 12장의 skip_pdf처럼 f/p 가중 없이 감쇠만 곱한다.
+		double scatteringPdf = rec.MaterialPtr->ScatteringPdf(currentRay, rec, scattered);
+		if (scatteringPdf > 0.0)
+		{
+			double pdfValue = scatteringPdf;
+			throughput = throughput * attenuation * (scatteringPdf / pdfValue);
+		}
+		else
+		{
+			throughput = throughput * attenuation;
+		}
 		currentRay = scattered;
 	}
 
@@ -718,10 +735,11 @@ int main(int argc, char** argv)
 	int blockHeight = 8;
 
 	// 픽셀당 샘플 수 기본값. 빛/볼륨 장면(5~9)은 작은 광원·산란 때문에 노이즈가
-	// 심하므로 크게 잡는다. 최종 장면(9)은 무거워 100, 3권 코넬 박스는 원서 2장처럼 64.
+	// 심하므로 크게 잡는다. 최종 장면(9)은 무거워 100, 3권 코넬 박스는 원서 6장처럼
+	// 1000(층화 격자 때문에 31x31 = 961).
 	if (numSamples <= 0)
 	{
-		if (bBook3Scene) numSamples = 64;
+		if (bBook3Scene) numSamples = 1000;
 		else if (sceneId == 9) numSamples = 100;
 		else if (sceneId >= 5) numSamples = 200;
 		else numSamples = 10;

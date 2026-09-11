@@ -23,6 +23,25 @@ __device__ inline Vector3 RandomInUnitSphere(curandState* randState)
     return p;
 }
 
+// 디바이스 코드에서 쓰는 π (RtWeekend.h의 Pi는 호스트 전용 헤더에 있다)
+constexpr double kPi = 3.1415926535897932385;
+
+// === The Rest of Your Life Chapter 6: 단위 구 "위"의 무작위 방향 ===
+// 단위 공 안의 점을 뽑아 정규화한다. 원점에 아주 가까운 점은 정규화할 때 0으로
+// 나누게 되므로 다시 뽑는다.
+__device__ inline Vector3 RandomUnitVector(curandState* randState)
+{
+    while (true)
+    {
+        Vector3 p = 2.0 * Vector3(curand_uniform(randState),
+                                   curand_uniform(randState),
+                                   curand_uniform(randState)) - Vector3(1.0, 1.0, 1.0);
+        double lengthSquared = p.LengthSquared();
+        if (1e-160 < lengthSquared && lengthSquared < 1.0)
+            return p / sqrt(lengthSquared);
+    }
+}
+
 // 재질 기본 클래스
 class Material
 {
@@ -41,6 +60,17 @@ public:
         Color& attenuation,
         Ray& scattered,
         curandState* randState) const = 0;
+
+    // === The Rest of Your Life Chapter 6: 산란 PDF (pScatter) ===
+    // 이 재질이 scattered 방향으로 빛을 보낼 확률 밀도(입체각 기준).
+    // 기본값 0 = "정의하지 않음". Metal/Dielectric처럼 방향이 사실상 하나로 정해지는
+    // (PDF가 델타 함수인) 재질은 f/p로 나눌 수 없으므로, RayColor가 이 경우 감쇠만
+    // 곱한다(원서 12장의 skip_pdf와 같은 처리).
+    __device__ virtual double ScatteringPdf(
+        const Ray& rayIn, const HitRecord& rec, const Ray& scattered) const
+    {
+        return 0.0;
+    }
 };
 
 // 난반사 재질 (Lambertian)
@@ -72,7 +102,11 @@ public:
         Ray& scattered,
         curandState* randState) const override
     {
-        Vector3 scatterDirection = rec.Normal + RandomInUnitSphere(randState);
+        // === 3권 6장: 진짜 Lambertian(cos/pi) 분포로 산란 ===
+        // 법선 + "단위 구 위의" 무작위 점. 예전의 "단위 공 안의" 점(RandomInUnitSphere)은
+        // cos^3 분포였다(3권 5장 --demo lambert로 확인). 그 상태로는 아래 ScatteringPdf
+        // (cos/pi)와 실제 샘플 분포가 달라지므로 여기서 바로잡는다.
+        Vector3 scatterDirection = rec.Normal + RandomUnitVector(randState);
 
         // 산란 방향이 법선과 거의 반대여서 영벡터에 가까워지는 경우 방지
         if (scatterDirection.NearZero())
@@ -83,6 +117,16 @@ public:
         // 히트 지점의 텍스처 좌표로 색을 조회한다(단색이면 항상 같은 값).
         attenuation = mTexture->Value(rec.U, rec.V, rec.P);
         return true;
+    }
+
+    // === 3권 6장: Lambertian의 산란 PDF ===
+    // pScatter = cos(theta) / pi  (theta는 법선과 산란 방향 사이 각, 수평선 아래는 0).
+    // 반구에서 적분하면 1이 되도록 1/pi로 정규화한 값이다(3권 5장).
+    __device__ double ScatteringPdf(
+        const Ray& rayIn, const HitRecord& rec, const Ray& scattered) const override
+    {
+        double cosTheta = Dot(rec.Normal, UnitVector(scattered.Direction()));
+        return cosTheta < 0.0 ? 0.0 : cosTheta / kPi;
     }
 
 private:
