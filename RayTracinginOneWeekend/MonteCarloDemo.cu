@@ -655,6 +655,183 @@ static void DemoSphere()
 }
 
 // ─────────────────────────────────────────────────────────────────────
+// 5장: 빛의 산란 — Lambertian 산란 PDF 확인
+// ─────────────────────────────────────────────────────────────────────
+// 원서 5장은 코드 없이 수식만 세운다. 여기서는 그 수식을 숫자로 확인한다.
+//   (1) 정규화: 반구에서 pScatter = cos(theta)/pi 를 적분하면 1 이어야 한다.
+//   (2) 산란 방향 생성기가 정말 cos(theta)/pi 분포를 따르는지 cos(theta) 히스토그램으로 본다.
+//       - inBall  : normal + (단위 공 "안"의 무작위 점)  <- 지금 우리 렌더러의 Lambertian
+//       - onSphere: normal + (단위 구 "위"의 무작위 점) <- 원서 v4의 Lambertian
+//       - hemi    : 반구 균일 방향
+//   법선은 +z로 고정한다(그러면 cos(theta) = 방향의 z성분).
+
+constexpr int kCosBins = 10;
+
+enum ScatterGenId
+{
+	kGenInBall = 0,
+	kGenOnSphere = 1,
+	kGenHemisphere = 2
+};
+
+// 단위 공 안의 무작위 점(거절법). 렌더러의 RandomInUnitSphere와 같은 방식.
+__device__ inline Vector3 RandomInUnitBall(DemoRng* rng)
+{
+	while (true)
+	{
+		Vector3 p(RandomDouble(rng, -1.0, 1.0), RandomDouble(rng, -1.0, 1.0), RandomDouble(rng, -1.0, 1.0));
+		if (p.LengthSquared() < 1.0)
+			return p;
+	}
+}
+
+__device__ inline Vector3 ScatterDirection(int generator, DemoRng* rng)
+{
+	const Vector3 normal(0.0, 0.0, 1.0);
+	int tries;
+	Vector3 d;
+
+	if (generator == kGenInBall)
+	{
+		d = normal + RandomInUnitBall(rng);
+	}
+	else if (generator == kGenOnSphere)
+	{
+		d = normal + RandomUnitVectorRejection(rng, tries);
+	}
+	else
+	{
+		d = RandomUnitVectorRejection(rng, tries);
+		if (d.Z() < 0.0)
+			d = -d;    // 아래 반구면 뒤집어 위 반구로
+	}
+
+	// 무작위 점이 정확히 -normal이면 영벡터가 된다 → 법선으로 대체(렌더러와 동일)
+	if (d.NearZero())
+		d = normal;
+
+	return UnitVector(d);
+}
+
+// (1) 반구 정규화: 구 전체에서 균일하게 뽑아 f = max(0, cos)/pi 를 p = 1/(4 pi)로 나눈 평균 → 1
+__global__ void LambertNormalizationKernel(
+	unsigned long long seed, int numThreads, int samplesPerThread, double* partialSums)
+{
+	int id = blockIdx.x * blockDim.x + threadIdx.x;
+	if (id >= numThreads) return;
+
+	DemoRng rng;
+	curand_init(seed, id, 0, &rng);
+
+	double sum = 0.0;
+	for (int k = 0; k < samplesPerThread; k++)
+	{
+		int tries;
+		double c = RandomUnitVectorRejection(&rng, tries).Z();
+		double pScatter = (c > 0.0) ? c / kPi : 0.0;   // 수평선 아래로는 산란하지 않는다
+		sum += pScatter * (4.0 * kPi);                 // f / p,  p = 1/(4 pi)
+	}
+	partialSums[id] = sum;
+}
+
+// (2) cos(theta) 히스토그램.
+// 블록 전용 히스토그램(공유 메모리)에 먼저 모은 뒤, 블록마다 한 번씩 전역에 더한다.
+// 모든 스레드가 전역 bins[10]에 직접 atomicAdd하면 주소 10개에 경합이 몰린다
+// (공유 메모리 "사유화(privatization)" — CUDA 히스토그램의 기본 패턴).
+__global__ void CosineHistogramKernel(
+	unsigned long long seed, int generator, int numThreads, int samplesPerThread,
+	unsigned long long* bins, double* partialCosSums)
+{
+	__shared__ unsigned int localBins[kCosBins];
+	for (int b = threadIdx.x; b < kCosBins; b += blockDim.x)
+		localBins[b] = 0;
+	__syncthreads();
+
+	int id = blockIdx.x * blockDim.x + threadIdx.x;
+	if (id < numThreads)
+	{
+		DemoRng rng;
+		curand_init(seed, id, 0, &rng);
+
+		double cosSum = 0.0;
+		for (int k = 0; k < samplesPerThread; k++)
+		{
+			double c = ScatterDirection(generator, &rng).Z();   // 법선이 +z라 cos(theta) = z
+			cosSum += c;
+
+			int bin = int(c * kCosBins);
+			if (bin < 0) bin = 0;
+			if (bin >= kCosBins) bin = kCosBins - 1;
+			atomicAdd(&localBins[bin], 1u);
+		}
+		partialCosSums[id] = cosSum;
+	}
+	__syncthreads();
+
+	for (int b = threadIdx.x; b < kCosBins; b += blockDim.x)
+		atomicAdd(&bins[b], (unsigned long long)localBins[b]);
+}
+
+static void DemoLambert()
+{
+	const int numThreads = 1 << 20;
+	const int samplesPerThread = 8;
+	const double n = double(numThreads) * double(samplesPerThread);
+	const int threadsPerBlock = 256;
+	const int blocks = (numThreads + threadsPerBlock - 1) / threadsPerBlock;
+
+	double* dPartial;
+	checkDemoErrors(cudaMalloc((void**)&dPartial, numThreads * sizeof(double)));
+
+	// (1) 정규화
+	LambertNormalizationKernel<<<blocks, threadsPerBlock>>>(77, numThreads, samplesPerThread, dPartial);
+	checkDemoErrors(cudaGetLastError());
+	double integral = DeviceSum(dPartial, numThreads) / n;
+
+	printf("[lambert] (1) integral of pScatter = cos(theta)/pi over the hemisphere, N = %.0f\n", n);
+	printf("  Estimate = %.9f   (should be 1)\n\n", integral);
+
+	// (2) 생성기별 cos(theta) 분포
+	unsigned long long* dBins;
+	checkDemoErrors(cudaMalloc((void**)&dBins, kCosBins * sizeof(unsigned long long)));
+
+	unsigned long long hist[3][kCosBins];
+	double meanCos[3];
+	for (int g = 0; g < 3; g++)
+	{
+		checkDemoErrors(cudaMemset(dBins, 0, kCosBins * sizeof(unsigned long long)));
+		CosineHistogramKernel<<<blocks, threadsPerBlock>>>(500 + g, g, numThreads, samplesPerThread, dBins, dPartial);
+		checkDemoErrors(cudaGetLastError());
+		checkDemoErrors(cudaMemcpy(hist[g], dBins, sizeof(hist[g]), cudaMemcpyDeviceToHost));
+		meanCos[g] = DeviceSum(dPartial, numThreads) / n;
+	}
+
+	checkDemoErrors(cudaFree(dBins));
+	checkDemoErrors(cudaFree(dPartial));
+
+	// 이상적인 분포의 칸별 확률 (mu = cos(theta), 방위각은 적분해 없앰)
+	//   cos/pi   : p(mu) = 2 mu     → 칸 확률 mu1^2 - mu0^2,  평균 cos = 2/3
+	//   cos^3    : p(mu) = 4 mu^3   → 칸 확률 mu1^4 - mu0^4,  평균 cos = 4/5
+	//   uniform  : p(mu) = 1        → 칸 확률 0.1,             평균 cos = 1/2
+	printf("[lambert] (2) distribution of cos(theta) for three scatter-direction generators (normal = +z)\n");
+	printf("%-11s  %9s %9s %9s  | %9s %9s %9s\n",
+		"cos(theta)", "inBall", "onSphere", "hemi", "cos/pi", "cos^3", "uniform");
+	for (int b = 0; b < kCosBins; b++)
+	{
+		double mu0 = double(b) / kCosBins;
+		double mu1 = double(b + 1) / kCosBins;
+		printf("[%.1f, %.1f)  %9.4f %9.4f %9.4f  | %9.4f %9.4f %9.4f\n",
+			mu0, mu1,
+			hist[0][b] / n, hist[1][b] / n, hist[2][b] / n,
+			mu1 * mu1 - mu0 * mu0,
+			mu1 * mu1 * mu1 * mu1 - mu0 * mu0 * mu0 * mu0,
+			1.0 / kCosBins);
+	}
+	printf("%-11s  %9.4f %9.4f %9.4f  | %9.4f %9.4f %9.4f\n",
+		"mean cos", meanCos[0], meanCos[1], meanCos[2], 2.0 / 3.0, 4.0 / 5.0, 0.5);
+}
+
+// ─────────────────────────────────────────────────────────────────────
 // 진입점
 // ─────────────────────────────────────────────────────────────────────
 
@@ -685,6 +862,11 @@ bool RunMonteCarloDemo(const char* name)
 		DemoSphere();
 		return true;
 	}
+	if (strcmp(name, "lambert") == 0)
+	{
+		DemoLambert();
+		return true;
+	}
 
 	return false;
 }
@@ -697,4 +879,5 @@ void PrintMonteCarloDemoList()
 	fprintf(stderr, "  halfway    ch.3  50%% point of a PDF via GPU sort + prefix sum\n");
 	fprintf(stderr, "  importance ch.3  integrate x^2 with uniform/half-split/linear/quadratic PDFs\n");
 	fprintf(stderr, "  sphere     ch.4  integrate cos^2 over the unit sphere (rejection-sampled directions)\n");
+	fprintf(stderr, "  lambert    ch.5  Lambertian scattering PDF: normalization + cos(theta) histograms\n");
 }
