@@ -26,6 +26,7 @@
 
 #include "MonteCarloDemo.h"
 #include "DemoThrust.h"   // thrust 병렬 기본 연산(리덕션/정렬/누적합)은 별도 파일로 격리
+#include "Vec3.h"         // 4장부터: 방향(단위 벡터)을 다룬다
 
 #define checkDemoErrors(val) CheckDemoCuda((val), #val, __FILE__, __LINE__)
 
@@ -548,6 +549,112 @@ static void DemoImportance()
 }
 
 // ─────────────────────────────────────────────────────────────────────
+// 4장: 방향(단위 구) 위의 몬테카를로 적분
+// ─────────────────────────────────────────────────────────────────────
+
+// 거절법(rejection method)으로 균일한 무작위 방향을 만든다(1·2권 방식).
+// [-1,1]^3 정육면체에서 점을 뽑아 단위 공 안에 들어오면 정규화해 단위 구 위의 점,
+// 즉 방향으로 쓴다. 공 밖이면 다시 뽑는다. 받아들여질 확률은 (공 부피)/(정육면체 부피)
+// = (4/3 pi)/8 = pi/6 (약 52%)이라, 평균 6/pi (약 1.91)번 시도한다.
+// tries에 이번 샘플의 시도 횟수를 돌려준다(워프 발산 측정용).
+__device__ inline Vector3 RandomUnitVectorRejection(DemoRng* rng, int& tries)
+{
+	tries = 0;
+	while (true)
+	{
+		tries++;
+		Vector3 p(RandomDouble(rng, -1.0, 1.0), RandomDouble(rng, -1.0, 1.0), RandomDouble(rng, -1.0, 1.0));
+		double lengthSquared = p.LengthSquared();
+
+		// 원점에 너무 가까운 점은 정규화할 때 0으로 나누게 되므로 버린다.
+		if (1e-160 < lengthSquared && lengthSquared <= 1.0)
+			return p / sqrt(lengthSquared);
+	}
+}
+
+// 단위 구 전체에서 cos^2(theta) 적분: f(d) = d_z^2, p(d) = 1/(4 pi).
+// 거절법의 while 루프는 스레드마다 반복 횟수가 다르다. 워프(32스레드)는 가장 오래
+// 도는 스레드를 기다려야 하므로, 실제 비용은 "평균 시도 횟수"가 아니라 "워프 안 최대
+// 시도 횟수"다. __shfl_xor_sync로 워프 최대값을 구해 그 비용도 같이 잰다.
+__global__ void SphereIntegrateKernel(
+	unsigned long long seed, int numThreads, int samplesPerThread,
+	double* partialSums, double* partialTries, double* partialWarpTries)
+{
+	int id = blockIdx.x * blockDim.x + threadIdx.x;
+	bool bValid = (id < numThreads);   // 워프 셔플은 모든 레인이 참여해야 하므로 return 대신 플래그
+
+	DemoRng rng;
+	curand_init(seed, id, 0, &rng);
+
+	const double pdf = 1.0 / (4.0 * kPi);   // 균일 구면 밀도 = 1 / (구의 넓이)
+	double sum = 0.0;
+	double triesTotal = 0.0;
+	double warpTriesTotal = 0.0;
+
+	for (int k = 0; k < samplesPerThread; k++)
+	{
+		int tries = 0;
+		if (bValid)
+		{
+			Vector3 d = RandomUnitVectorRejection(&rng, tries);
+			double cosineSquared = d.Z() * d.Z();   // theta는 z축과의 각 → cos(theta) = d_z
+			sum += cosineSquared / pdf;
+		}
+		triesTotal += tries;
+
+		// 워프 안 최대 시도 횟수 (나비 모양 셔플 리덕션)
+		int warpMax = tries;
+		for (int offset = 16; offset > 0; offset >>= 1)
+			warpMax = max(warpMax, __shfl_xor_sync(0xffffffffu, warpMax, offset));
+		warpTriesTotal += warpMax;
+	}
+
+	if (bValid)
+	{
+		partialSums[id] = sum;
+		partialTries[id] = triesTotal;
+		partialWarpTries[id] = warpTriesTotal;
+	}
+}
+
+static void DemoSphere()
+{
+	const int numThreads = 1 << 20;
+	const int samplesPerThread = 16;
+
+	double* dSums;
+	double* dTries;
+	double* dWarpTries;
+	checkDemoErrors(cudaMalloc((void**)&dSums, numThreads * sizeof(double)));
+	checkDemoErrors(cudaMalloc((void**)&dTries, numThreads * sizeof(double)));
+	checkDemoErrors(cudaMalloc((void**)&dWarpTries, numThreads * sizeof(double)));
+
+	int threadsPerBlock = 256;
+	SphereIntegrateKernel<<<(numThreads + threadsPerBlock - 1) / threadsPerBlock, threadsPerBlock>>>(
+		2024, numThreads, samplesPerThread, dSums, dTries, dWarpTries);
+	checkDemoErrors(cudaGetLastError());
+
+	double n = double(numThreads) * double(samplesPerThread);
+	double estimate = DeviceSum(dSums, numThreads) / n;
+	double meanTries = DeviceSum(dTries, numThreads) / n;
+	double meanWarpTries = DeviceSum(dWarpTries, numThreads) / n;
+
+	checkDemoErrors(cudaFree(dSums));
+	checkDemoErrors(cudaFree(dTries));
+	checkDemoErrors(cudaFree(dWarpTries));
+
+	double exact = 4.0 * kPi / 3.0;
+	printf("[sphere] integral of cos^2(theta) over the unit sphere, N = %.0f\n", n);
+	printf("  Estimate          = %.12f\n", estimate);
+	printf("  Exact (4/3 pi)    = %.12f\n", exact);
+	printf("  |error|           = %.12f\n", fabs(estimate - exact));
+	printf("rejection-method cost per sample\n");
+	printf("  mean tries per thread      = %.4f   (theory 6/pi = %.4f)\n", meanTries, 6.0 / kPi);
+	printf("  mean tries the warp waited = %.4f   (max over the 32 lanes)\n", meanWarpTries);
+	printf("  lane utilization           = %.1f%%\n", 100.0 * meanTries / meanWarpTries);
+}
+
+// ─────────────────────────────────────────────────────────────────────
 // 진입점
 // ─────────────────────────────────────────────────────────────────────
 
@@ -573,6 +680,11 @@ bool RunMonteCarloDemo(const char* name)
 		DemoImportance();
 		return true;
 	}
+	if (strcmp(name, "sphere") == 0)
+	{
+		DemoSphere();
+		return true;
+	}
 
 	return false;
 }
@@ -584,4 +696,5 @@ void PrintMonteCarloDemoList()
 	fprintf(stderr, "  integrate  ch.3  uniform MC integration of x^2, sin^5, ln(sin)\n");
 	fprintf(stderr, "  halfway    ch.3  50%% point of a PDF via GPU sort + prefix sum\n");
 	fprintf(stderr, "  importance ch.3  integrate x^2 with uniform/half-split/linear/quadratic PDFs\n");
+	fprintf(stderr, "  sphere     ch.4  integrate cos^2 over the unit sphere (rejection-sampled directions)\n");
 }
