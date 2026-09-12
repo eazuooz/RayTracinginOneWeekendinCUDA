@@ -4,6 +4,7 @@
 
 #include "Ray.h"
 #include "Vec3.h"
+#include "Onb.h"
 #include "Texture.h"
 #include "Hittable.h"
 #include <curand_kernel.h>
@@ -72,11 +73,16 @@ public:
         return Color(0.0, 0.0, 0.0);
     }
 
+    // === The Rest of Your Life Chapter 8: pdf 출력 인자 추가 ===
+    // 재질이 "어떤 밀도로 이 방향을 뽑았는지"(pdf)를 함께 알려준다. RayColor는 더 이상
+    // pdfValue를 스스로 가정하지 않고 이 값으로 나눈다. 방향이 사실상 하나로 정해지는
+    // 재질(Metal/Dielectric)은 pdf = 0을 돌려주고, 그 경우 RayColor가 감쇠만 곱한다.
     __device__ virtual bool Scatter(
         const Ray& rayIn,
         const HitRecord& rec,
         Color& attenuation,
         Ray& scattered,
+        double& pdf,
         curandState* randState) const = 0;
 
     // === The Rest of Your Life Chapter 6: 산란 PDF (pScatter) ===
@@ -118,22 +124,23 @@ public:
         const HitRecord& rec,
         Color& attenuation,
         Ray& scattered,
+        double& pdf,
         curandState* randState) const override
     {
-        // === 3권 6장: 진짜 Lambertian(cos/pi) 분포로 산란 ===
-        // 법선 + "단위 구 위의" 무작위 점. 예전의 "단위 공 안의" 점(RandomInUnitSphere)은
-        // cos^3 분포였다(3권 5장 --demo lambert로 확인). 그 상태로는 아래 ScatteringPdf
-        // (cos/pi)와 실제 샘플 분포가 달라지므로 여기서 바로잡는다.
-        Vector3 scatterDirection = rec.Normal + RandomUnitVector(randState);
-
-        // 산란 방향이 법선과 거의 반대여서 영벡터에 가까워지는 경우 방지
-        if (scatterDirection.NearZero())
-            scatterDirection = rec.Normal;
+        // === 3권 8장: ONB + 코사인 분포 역변환 샘플링 ===
+        // 7장의 RandomCosineDirection은 "z축이 법선"인 좌표계의 방향이다. 이 표면의
+        // 법선에 맞춘 정규직교 기저로 옮기면 곧바로 cos/pi 분포의 산란 방향이 된다.
+        // (6장까지 쓰던 "법선 + 구 위의 점"과 같은 분포지만, 거절법 루프가 없어
+        //  워프 발산이 없고 pdf 값을 그 자리에서 정확히 알 수 있다.)
+        Onb uvw(rec.Normal);
+        Vector3 scatterDirection = UnitVector(uvw.Transform(RandomCosineDirection(randState)));
 
         // 산란 레이는 입력 레이의 time을 그대로 물려받는다
         scattered = Ray(rec.P, scatterDirection, rayIn.Time());
         // 히트 지점의 텍스처 좌표로 색을 조회한다(단색이면 항상 같은 값).
         attenuation = mTexture->Value(rec.U, rec.V, rec.P);
+        // 이 방향을 뽑은 밀도 = cos(theta)/pi (방향과 법선 사이 각)
+        pdf = Dot(uvw.W(), scatterDirection) / kPi;
         return true;
     }
 
@@ -184,6 +191,7 @@ public:
         const HitRecord& rec,
         Color& attenuation,
         Ray& scattered,
+        double& pdf,
         curandState* randState) const override
     {
         return false;
@@ -216,12 +224,22 @@ public:
         const HitRecord& rec,
         Color& attenuation,
         Ray& scattered,
+        double& pdf,
         curandState* randState) const override
     {
         // 균일 무작위 방향(단위 구 위의 한 점). 입사 레이의 time은 보존한다.
-        scattered = Ray(rec.P, UnitVector(RandomInUnitSphere(randState)), rayIn.Time());
+        scattered = Ray(rec.P, RandomUnitVector(randState), rayIn.Time());
         attenuation = mTexture->Value(rec.U, rec.V, rec.P);
+        // === 3권 8장 === 구 전체에 균일 → 밀도는 1/(4 pi)
+        pdf = 1.0 / (4.0 * kPi);
         return true;
+    }
+
+    // 등방성 산란의 산란 PDF도 구 전체 균일(1/4 pi)이다.
+    __device__ double ScatteringPdf(
+        const Ray& rayIn, const HitRecord& rec, const Ray& scattered) const override
+    {
+        return 1.0 / (4.0 * kPi);
     }
 
 private:

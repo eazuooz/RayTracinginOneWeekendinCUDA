@@ -87,7 +87,10 @@ __device__ Color RayColor(const Ray& r, const Color& background, Hittable** worl
 
 		Ray scattered;
 		Color attenuation;
-		if (!rec.MaterialPtr->Scatter(currentRay, rec, attenuation, scattered, randState))
+		// === The Rest of Your Life Chapter 8 ===
+		// 재질이 "이 방향을 뽑은 밀도"를 pdfValue로 알려준다(델타 분포 재질은 0).
+		double pdfValue = 0.0;
+		if (!rec.MaterialPtr->Scatter(currentRay, rec, attenuation, scattered, pdfValue, randState))
 		{
 			// 산란 안 함(빛/흡수) → 지금까지 모은 색 반환
 			return accumulated;
@@ -102,9 +105,10 @@ __device__ Color RayColor(const Ray& r, const Color& background, Hittable** worl
 		// ScatteringPdf를 정의하지 않은 재질(0을 돌려주는 Metal/Dielectric/Isotropic)은
 		// 원서 12장의 skip_pdf처럼 f/p 가중 없이 감쇠만 곱한다.
 		double scatteringPdf = rec.MaterialPtr->ScatteringPdf(currentRay, rec, scattered);
-		if (scatteringPdf > 0.0)
+		if (scatteringPdf > 0.0 && pdfValue > 0.0)
 		{
-			double pdfValue = scatteringPdf;
+			// 8장부터 pdfValue는 재질이 알려준 "실제로 뽑은 분포의 밀도"다.
+			// (Lambertian은 pScatter와 같은 분포로 뽑으므로 여전히 약분되어 1이 된다.)
 			throughput = throughput * attenuation * (scatteringPdf / pdfValue);
 		}
 		else

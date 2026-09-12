@@ -20,10 +20,14 @@ public:
 		const HitRecord& rec,
 		Color& attenuation,
 		Ray& scattered,
+		double& pdf,
 		curandState* randState) const override
 	{
 		// 유전체는 빛을 흡수하지 않음
 		attenuation = Color(1.0, 1.0, 1.0);
+
+		// === 3권 8장 === 반사/굴절 모두 방향이 하나로 정해지는 델타 분포 → PDF 없음
+		pdf = 0.0;
 
 		// bFrontFace로 굴절률 비율 결정
 		// 앞면: 공기(1.0) → 유리(mRefractionIndex)
