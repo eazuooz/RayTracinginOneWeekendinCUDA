@@ -65,7 +65,9 @@ void CheckCuda(cudaError_t result, char const* const func, const char* const fil
 // 더 이상 산란하지 않으면(빛이거나 흡수) 지금까지 모은 색을 반환하고,
 // 아무것도 맞추지 못하면 배경색을 throughput에 실어 더한 뒤 반환한다.
 // (background가 (0,0,0)이면 장면의 유일한 빛은 발광 재질뿐이다.)
-__device__ Color RayColor(const Ray& r, const Color& background, Hittable** world, curandState* randState)
+__device__ Color RayColor(
+	const Ray& r, const Color& background, Hittable** world,
+	bool bSampleLight, curandState* randState)
 {
 	Ray currentRay = r;
 	Color throughput(1.0, 1.0, 1.0);
@@ -82,7 +84,7 @@ __device__ Color RayColor(const Ray& r, const Color& background, Hittable** worl
 		}
 
 		// 방출광 누적(비발광 재질은 검정이라 영향 없음)
-		Color emission = rec.MaterialPtr->Emitted(rec.U, rec.V, rec.P);
+		Color emission = rec.MaterialPtr->Emitted(currentRay, rec, rec.U, rec.V, rec.P);
 		accumulated += throughput * emission;
 
 		Ray scattered;
@@ -104,6 +106,40 @@ __device__ Color RayColor(const Ray& r, const Color& background, Hittable** worl
 		// 둘이 약분되어 곱해지는 값은 결국 감쇠뿐이다(그림은 그대로여야 정상).
 		// ScatteringPdf를 정의하지 않은 재질(0을 돌려주는 Metal/Dielectric/Isotropic)은
 		// 원서 12장의 skip_pdf처럼 f/p 가중 없이 감쇠만 곱한다.
+		// === The Rest of Your Life Chapter 9: 광원 직접 샘플링 (하드코딩 버전) ===
+		// 재질이 정한 방향 대신 "천장 광원 위의 무작위 점"으로 레이를 보낸다. 광원을
+		// 맞힐 확률이 1이 되므로 노이즈가 급감한다. 대신 밀도가 달라지므로 입체각 기준
+		// 밀도로 바꿔 나눠 줘야 한다:
+		//     p(w) = 거리^2 / (cos(theta_light) * 광원 넓이)
+		// (광원 위에서 균일하게 뽑으면 면적 기준 밀도가 1/A이고, 면적 dA가 단위 구에
+		//  투영되면 dw = dA * cos / 거리^2 이므로 위 식이 나온다.)
+		//
+		// ※ 이 버전은 scene 10의 광원 좌표를 코드에 박아 둔 임시 구현이다. 10장에서
+		//   PDF 클래스로 정리하고, 표면 PDF와 섞어서 거울/유리도 다시 살린다.
+		if (bSampleLight && pdfValue > 0.0)
+		{
+			// 광원 사각형 (x: 213~343, y: 554, z: 227~332) 위의 한 점
+			double lightX = 213.0 + 130.0 * curand_uniform(randState);
+			double lightZ = 227.0 + 105.0 * curand_uniform(randState);
+			Point3 onLight(lightX, 554.0, lightZ);
+
+			Vector3 toLight = onLight - rec.P;
+			double distanceSquared = toLight.LengthSquared();
+			toLight = UnitVector(toLight);
+
+			// 표면 뒤쪽에 있는 광원으로는 보낼 수 없다.
+			if (Dot(toLight, rec.Normal) < 0.0)
+				return accumulated;
+
+			double lightArea = (343.0 - 213.0) * (332.0 - 227.0);
+			double lightCosine = fabs(toLight.Y());   // 광원 법선은 y축
+			if (lightCosine < 0.000001)
+				return accumulated;
+
+			pdfValue = distanceSquared / (lightCosine * lightArea);
+			scattered = Ray(rec.P, toLight, currentRay.Time());
+		}
+
 		double scatteringPdf = rec.MaterialPtr->ScatteringPdf(currentRay, rec, scattered);
 		if (scatteringPdf > 0.0 && pdfValue > 0.0)
 		{
@@ -152,7 +188,7 @@ __global__ void RenderInit(int maxX, int maxY, curandState* randState)
 // 이중 루프만 바꾸면 된다.
 __global__ void Render(
 	Vector3* frameBuffer, int maxX, int maxY, int sqrtSpp, bool bStratify,
-	Camera** camera, Hittable** world, curandState* randState)
+	bool bSampleLight, Camera** camera, Hittable** world, curandState* randState)
 {
 	int i = threadIdx.x + blockIdx.x * blockDim.x;
 	int j = threadIdx.y + blockIdx.y * blockDim.y;
@@ -191,7 +227,7 @@ __global__ void Render(
 			double u = (double(i) + px) / double(maxX);
 			double v = (double(j) + py) / double(maxY);
 			Ray r = (*camera)->GetRay(u, v, &localRandState);
-			col += RayColor(r, background, world, &localRandState);
+			col += RayColor(r, background, world, bSampleLight, &localRandState);
 		}
 	}
 
@@ -680,6 +716,7 @@ int main(int argc, char** argv)
 	int sceneId = 10;
 	int numSamples = -1;            // -1이면 아래에서 장면별 기본값을 쓴다
 	bool bStratify = true;          // 3권 2장: 픽셀 안 층화 샘플링
+	bool bSampleLight = true;       // 3권 9장: 광원 직접 샘플링(3권 코넬 박스에만 적용)
 	const char* outPath = "output.ppm";
 
 	// === 명령행 옵션 (3권부터 추가) ===
@@ -713,6 +750,10 @@ int main(int argc, char** argv)
 		{
 			bStratify = false;
 		}
+		else if (strcmp(argv[a], "--nolightsample") == 0)
+		{
+			bSampleLight = false;
+		}
 		else if (strcmp(argv[a], "--out") == 0 && a + 1 < argc)
 		{
 			outPath = argv[++a];
@@ -734,6 +775,9 @@ int main(int argc, char** argv)
 	bool bBook3Scene = (sceneId >= 10);
 	int imageWidth = bBook3Scene ? 600 : 1440;
 	int imageHeight = bBook3Scene ? 600 : 720;
+
+	// 광원 직접 샘플링은 광원 좌표를 하드코딩한 임시 구현이라 3권 코넬 박스에서만 켠다.
+	bSampleLight = bSampleLight && bBook3Scene;
 
 	int blockWidth = 8;
 	int blockHeight = 8;
@@ -764,7 +808,8 @@ int main(int argc, char** argv)
 	std::cerr << "Rendering scene " << sceneId << ": " << imageWidth << "x" << imageHeight
 		<< " image with " << numSamples << " samples per pixel ("
 		<< (bStratify ? "stratified " : "random ") << sqrtSpp << "x" << sqrtSpp << ") "
-		<< "in " << blockWidth << "x" << blockHeight << " blocks.\n";
+		<< "in " << blockWidth << "x" << blockHeight << " blocks"
+		<< (bSampleLight ? ", sampling the light directly" : "") << ".\n";
 
 	int numPixels = imageWidth * imageHeight;
 	size_t frameBufferSize = numPixels * sizeof(Vector3);
@@ -848,7 +893,7 @@ int main(int argc, char** argv)
 
 	Render<<<blocks, threads>>>(
 		frameBuffer, imageWidth, imageHeight,
-		sqrtSpp, bStratify, camera, world, randState);
+		sqrtSpp, bStratify, bSampleLight, camera, world, randState);
 	checkCudaErrors(cudaGetLastError());
 	checkCudaErrors(cudaDeviceSynchronize());
 

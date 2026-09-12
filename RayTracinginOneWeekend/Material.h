@@ -68,7 +68,10 @@ public:
     // === The Next Week Chapter 7: 발광(Emissive) ===
     // 물체가 장면에 빛을 방출하면 이 함수가 그 색을 알려준다(반사 없음).
     // 비발광 재질은 이 기본 구현(검정)을 그대로 물려받아 아무 빛도 내지 않는다.
-    __device__ virtual Color Emitted(double u, double v, const Point3& p) const
+    // === The Rest of Your Life Chapter 9: 입사 레이/히트 정보를 함께 받는다 ===
+    // 광원이 "어느 면으로 빛을 내는지"를 판단할 수 있도록 rayIn과 rec를 넘긴다.
+    __device__ virtual Color Emitted(
+        const Ray& rayIn, const HitRecord& rec, double u, double v, const Point3& p) const
     {
         return Color(0.0, 0.0, 0.0);
     }
@@ -180,8 +183,15 @@ public:
     {
     }
 
-    __device__ Color Emitted(double u, double v, const Point3& p) const override
+    // === 3권 9장: 한쪽 면만 빛을 낸다 ===
+    // 코넬 박스 천장 광원은 아래(방 안쪽)로만 빛을 내야 한다. 뒷면(천장과 광원 사이
+    // 좁은 틈에서 보이는 쪽)까지 빛나면 그 틈에서 반짝이는 노이즈가 생긴다.
+    __device__ Color Emitted(
+        const Ray& rayIn, const HitRecord& rec, double u, double v, const Point3& p) const override
     {
+        if (!rec.bFrontFace)
+            return Color(0.0, 0.0, 0.0);
+
         return mTexture->Value(u, v, p);
     }
 
