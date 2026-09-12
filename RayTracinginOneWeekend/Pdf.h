@@ -5,7 +5,7 @@
 #include "Vec3.h"
 #include "Onb.h"
 #include "Hittable.h"
-#include "Material.h"   // RandomUnitVector, RandomCosineDirection, kPi
+#include "Sampling.h"   // kPi, RandomUnitVector, RandomCosineDirection
 
 // === The Rest of Your Life Chapter 10: PDF 클래스 ===
 //
@@ -57,6 +57,8 @@ public:
 class CosinePdf : public Pdf
 {
 public:
+    // 12장의 ScatterRecord가 값으로 품고 있다가 나중에 채우므로 기본 생성자가 필요하다.
+    __device__ CosinePdf() {}
     __device__ CosinePdf(const Vector3& w) : mUvw(w) {}
 
     __device__ double Value(const Vector3& direction) const override

@@ -15,19 +15,18 @@ public:
 	{
 	}
 
+	// === 3권 12장: ScatterRecord ===
+	// 반사/굴절 모두 방향이 하나로 정해지는 델타 분포다 → PDF 없이 SkipPdfRay를 따라간다.
 	__device__ bool Scatter(
 		const Ray& rayIn,
 		const HitRecord& rec,
-		Color& attenuation,
-		Ray& scattered,
-		double& pdf,
+		ScatterRecord& srec,
 		curandState* randState) const override
 	{
 		// 유전체는 빛을 흡수하지 않음
-		attenuation = Color(1.0, 1.0, 1.0);
-
-		// === 3권 8장 === 반사/굴절 모두 방향이 하나로 정해지는 델타 분포 → PDF 없음
-		pdf = 0.0;
+		srec.Attenuation = Color(1.0, 1.0, 1.0);
+		srec.PdfPtr = nullptr;
+		srec.bSkipPdf = true;
 
 		// bFrontFace로 굴절률 비율 결정
 		// 앞면: 공기(1.0) → 유리(mRefractionIndex)
@@ -54,7 +53,7 @@ public:
 		}
 
 		// 산란 레이는 입력 레이의 time을 그대로 물려받는다
-		scattered = Ray(rec.P, direction, rayIn.Time());
+		srec.SkipPdfRay = Ray(rec.P, direction, rayIn.Time());
 		return true;
 	}
 

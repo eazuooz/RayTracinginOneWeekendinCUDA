@@ -15,23 +15,26 @@ public:
 	{
 	}
 
+	// === 3권 12장: ScatterRecord ===
+	// 거울 반사는 방향이 (거의) 하나로 정해지는 델타 분포라 밀도로 나눌 수 없다.
+	// bSkipPdf = true 로 "PDF를 쓰지 말고 이 레이를 그대로 따라가라"고 알려준다.
 	__device__ bool Scatter(
 		const Ray& rayIn,
 		const HitRecord& rec,
-		Color& attenuation,
-		Ray& scattered,
-		double& pdf,
+		ScatterRecord& srec,
 		curandState* randState) const override
 	{
 		Vector3 reflected = Reflect(UnitVector(rayIn.Direction()), rec.Normal);
 		// 산란 레이는 입력 레이의 time을 그대로 물려받는다
-		scattered = Ray(rec.P, reflected + mFuzz * RandomInUnitSphere(randState), rayIn.Time());
-		attenuation = mAlbedo;
-		// === 3권 8장 ===
-		// 거울 반사는 방향이 (거의) 하나로 정해지는 델타 분포라 밀도로 나눌 수 없다.
-		// pdf = 0 은 "PDF 없음"을 뜻하고, RayColor가 f/p 가중 없이 감쇠만 곱한다.
-		pdf = 0.0;
-		return (Dot(scattered.Direction(), rec.Normal) > 0.0);
+		Ray reflectedRay(rec.P, reflected + mFuzz * RandomInUnitSphere(randState), rayIn.Time());
+
+		srec.Attenuation = mAlbedo;
+		srec.PdfPtr = nullptr;
+		srec.bSkipPdf = true;
+		srec.SkipPdfRay = reflectedRay;
+
+		// 표면 아래로 반사되면(퍼지가 큰 경우) 흡수로 처리한다.
+		return (Dot(reflectedRay.Direction(), rec.Normal) > 0.0);
 	}
 
 private:

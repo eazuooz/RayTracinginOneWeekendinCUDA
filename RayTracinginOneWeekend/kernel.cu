@@ -88,71 +88,67 @@ __device__ Color RayColor(
 		Color emission = rec.MaterialPtr->Emitted(currentRay, rec, rec.U, rec.V, rec.P);
 		accumulated += throughput * emission;
 
-		Ray scattered;
-		Color attenuation;
-		// === The Rest of Your Life Chapter 8 ===
-		// 재질이 "이 방향을 뽑은 밀도"를 pdfValue로 알려준다(델타 분포 재질은 0).
-		double pdfValue = 0.0;
-		if (!rec.MaterialPtr->Scatter(currentRay, rec, attenuation, scattered, pdfValue, randState))
+		// === The Rest of Your Life Chapter 12: ScatterRecord로 정리 ===
+		// 재질은 "감쇠 + (PDF 또는 정반사 레이)"만 돌려준다. 방향을 실제로 뽑고 밀도로
+		// 나누는 일은 전부 여기서 한다.
+		ScatterRecord srec;
+		if (!rec.MaterialPtr->Scatter(currentRay, rec, srec, randState))
 		{
 			// 산란 안 함(빛/흡수) → 지금까지 모은 색 반환
 			return accumulated;
 		}
 
+		// 정반사(거울/유리): 밀도로 나눌 수 없는 델타 분포 → 그대로 따라간다.
+		if (srec.bSkipPdf)
+		{
+			throughput = throughput * srec.Attenuation;
+			currentRay = srec.SkipPdfRay;
+			continue;
+		}
+
 		// === The Rest of Your Life Chapter 6: 중요도 샘플링 계측 ===
-		// 몬테카를로 기본식 (적분 ≈ f(r)/p(r)의 평균)을 산란에 그대로 적용한다:
+		// 몬테카를로 기본식 (적분 ≈ f(r)/p(r)의 평균)을 산란에 적용한다:
 		//   색_o = 방출 + 감쇠 * pScatter(방향) * 색_i / pdfValue(방향)
 		// 반복형이므로 "감쇠 * pScatter / pdfValue"를 throughput에 곱해 둔다.
-		// 지금은 산란 방향을 pScatter와 같은 분포로 뽑으므로 pdfValue = scatteringPdf,
-		// 둘이 약분되어 곱해지는 값은 결국 감쇠뿐이다(그림은 그대로여야 정상).
-		// ScatteringPdf를 정의하지 않은 재질(0을 돌려주는 Metal/Dielectric/Isotropic)은
-		// 원서 12장의 skip_pdf처럼 f/p 가중 없이 감쇠만 곱한다.
 		// === The Rest of Your Life Chapter 10: 혼합 밀도 (Mixture Density) ===
-		// 9장의 "광원만 샘플링"은 노이즈를 크게 줄였지만 직접광만 남기고 적분의 나머지를
-		// 버렸다(그림이 어두워졌다). 이제 두 PDF를 반반 섞어 둘 다 살린다.
+		// 재질이 준 PDF(srec.PdfPtr)와 광원 PDF를 반반 섞어 방향을 뽑는다.
 		//   pLight   : 광원 쪽으로 (HittablePdf) — 작은 광원을 확실히 맞힌다
-		//   pSurface : 재질의 분포 (CosinePdf)   — 간접광과 색 번짐을 살린다
-		// 어느 쪽에서 뽑았든 그 방향의 밀도는 두 밀도의 평균이다
-		// (같은 방향을 양쪽이 만들 수 있으므로 "어디서 나왔는지"는 알 필요가 없다).
+		//   pSurface : 재질의 분포 (Lambertian이면 CosinePdf, 볼륨이면 SpherePdf)
+		// 어느 쪽에서 뽑았든 그 방향의 밀도는 두 밀도의 평균이다.
 		//
-		// CUDA 메모: PDF 객체는 전부 스택에 만든다(바운스마다 디바이스 new를 하면
-		// 매우 느리고 힙도 금방 바닥난다). 광원이 없는 장면(1·2권)이나 델타 분포
-		// 재질(pdfValue == 0)은 이 경로를 타지 않고 예전 그대로 동작한다.
-		if (bSampleLight && lights != nullptr && *lights != nullptr && pdfValue > 0.0)
+		// CUDA 메모: PDF 객체는 전부 스택에 있다(ScatterRecord가 값으로 품고 있고,
+		// 여기서는 포인터만 엮는다). 광원이 없는 장면(1·2권)은 재질 PDF만 쓴다.
+		Ray scattered;
+		double pdfValue = 0.0;
+		if (bSampleLight && lights != nullptr && *lights != nullptr)
 		{
-			CosinePdf surfacePdf(rec.Normal);
 			HittablePdf lightPdf(*lights, rec.P, randState);
-			MixturePdf mixedPdf(&lightPdf, &surfacePdf);
+			MixturePdf mixedPdf(&lightPdf, srec.PdfPtr);
 
 			Vector3 direction = mixedPdf.Generate(randState);
 			scattered = Ray(rec.P, direction, currentRay.Time());
 			pdfValue = mixedPdf.Value(direction);
-
-			// 밀도가 0인 방향(광원을 등지는 방향 등)은 기여를 계산할 수 없다.
-			if (!(pdfValue > 0.0))
-				return accumulated;
-		}
-
-		double scatteringPdf = rec.MaterialPtr->ScatteringPdf(currentRay, rec, scattered);
-		if (pdfValue > 0.0)
-		{
-			// 확률적으로 산란하는 재질(Lambertian/Isotropic).
-			// pdfValue는 "실제로 뽑은 분포의 밀도"다(8장: 재질이, 10장부터는 혼합 PDF가 알려준다).
-			//
-			// ※ 10장에서 실제로 부딪힌 버그: 혼합 PDF는 광원 쪽 방향을 뽑기 때문에 표면
-			//   아래(수평선 뒤)를 향하는 방향도 나올 수 있다. 그때 pScatter는 0이고, 그
-			//   샘플의 기여도 0이어야 한다. 이 경우를 아래 "델타 분포" 분기로 흘려보내면
-			//   감쇠만 곱한 채 레이가 계속 나아가 에너지가 부풀어 오른다(그림이 6배 밝아졌다).
-			if (!(scatteringPdf > 0.0))
-				return accumulated;
-
-			throughput = throughput * attenuation * (scatteringPdf / pdfValue);
 		}
 		else
 		{
-			// 델타 분포 재질(Metal/Dielectric): 밀도로 나눌 수 없으므로 감쇠만 곱한다.
-			throughput = throughput * attenuation;
+			Vector3 direction = srec.PdfPtr->Generate(randState);
+			scattered = Ray(rec.P, direction, currentRay.Time());
+			pdfValue = srec.PdfPtr->Value(direction);
 		}
+
+		// 밀도가 0인 방향(광원을 등지는 방향 등)은 기여를 계산할 수 없다.
+		if (!(pdfValue > 0.0))
+			return accumulated;
+
+		// ※ 10장에서 실제로 부딪힌 버그: 혼합 PDF는 광원 쪽 방향을 뽑기 때문에 표면
+		//   아래(수평선 뒤)를 향하는 방향도 나올 수 있다. 그때 pScatter는 0이고 그
+		//   샘플의 기여도 0이어야 한다. 이 경우를 "정반사"처럼 취급해 감쇠만 곱하면
+		//   레이가 계속 나아가 에너지가 부풀어 오른다(그림이 6배 밝아졌다).
+		double scatteringPdf = rec.MaterialPtr->ScatteringPdf(currentRay, rec, scattered);
+		if (!(scatteringPdf > 0.0))
+			return accumulated;
+
+		throughput = throughput * srec.Attenuation * (scatteringPdf / pdfValue);
 		currentRay = scattered;
 	}
 
@@ -648,6 +644,55 @@ __global__ void CreateWorld(
 			vfov = 40.0;
 			aperture = 0.0;
 		}
+		else if (sceneId == 11 || sceneId == 12)
+		{
+			// === The Rest of Your Life Chapter 12 ===
+			//  11: 키 큰 상자를 알루미늄(금속)으로 — 정반사가 되살아났는지 확인 (원서 이미지 12)
+			//  12: 키 작은 상자 대신 유리 구 — 구를 향한 샘플링 (원서 이미지 13·14)
+			Material* red = new Lambertian(Color(0.65, 0.05, 0.05));
+			Material* white = new Lambertian(Color(0.73, 0.73, 0.73));
+			Material* green = new Lambertian(Color(0.12, 0.45, 0.15));
+			Material* light = new DiffuseLight(Color(15.0, 15.0, 15.0));
+
+			// 코넬 박스 벽 5개 (scene 10과 동일)
+			list[i++] = new Quad(Point3(555, 0, 0), Vector3(0, 0, 555), Vector3(0, 555, 0), green);
+			list[i++] = new Quad(Point3(0, 0, 555), Vector3(0, 0, -555), Vector3(0, 555, 0), red);
+			list[i++] = new Quad(Point3(0, 555, 0), Vector3(555, 0, 0), Vector3(0, 0, 555), white);
+			list[i++] = new Quad(Point3(0, 0, 555), Vector3(555, 0, 0), Vector3(0, 0, -555), white);
+			list[i++] = new Quad(Point3(555, 0, 555), Vector3(-555, 0, 0), Vector3(0, 555, 0), white);
+
+			// 천장 광원
+			list[i++] = new Quad(Point3(213, 554, 227), Vector3(130, 0, 0), Vector3(0, 0, 105), light);
+
+			// 키 큰 상자 (11: 알루미늄, 12: 흰색)
+			Material* tallBoxMaterial = (sceneId == 11)
+				? (Material*)new Metal(Color(0.8, 0.85, 0.88), 0.0)
+				: white;
+			Hittable* box1 = MakeBox(Point3(0, 0, 0), Point3(165, 330, 165), tallBoxMaterial);
+			box1 = new RotateY(box1, 15.0);
+			box1 = new Translate(box1, Vector3(265, 0, 295));
+			list[i++] = box1;
+
+			if (sceneId == 11)
+			{
+				// 키 작은 상자 (scene 10과 동일)
+				Hittable* box2 = MakeBox(Point3(0, 0, 0), Point3(165, 165, 165), white);
+				box2 = new RotateY(box2, -18.0);
+				box2 = new Translate(box2, Vector3(130, 0, 65));
+				list[i++] = box2;
+			}
+			else
+			{
+				// 유리 구 (원서 Listing sampling-sphere)
+				list[i++] = new Sphere(Point3(190, 90, 190), 90.0, new Dielectric(1.5));
+			}
+
+			background = Color(0.0, 0.0, 0.0);
+			lookfrom = Vector3(278.0, 278.0, -800.0);
+			lookat = Vector3(278.0, 278.0, 0.0);
+			vfov = 40.0;
+			aperture = 0.0;
+		}
 
 		*randState = localRandState;
 		*outCount = i;  // 실제 배치된 프리미티브 수 (FreeWorld에서 사용)
@@ -664,13 +709,27 @@ __global__ void CreateWorld(
 		// 3권 코넬 박스의 천장 광원과 같은 사각형을 하나 더 만들어 "이쪽으로 레이를
 		// 보내라"는 대상으로 쓴다. 밀도 계산과 점 뽑기에만 쓰이므로 재질은 필요 없다.
 		// (월드에 넣지 않으므로 BVH나 화면에는 영향이 없다.)
-		if (sceneId == 10)
+		if (sceneId == 10 || sceneId == 11)
 		{
 			*lights = new Quad(
 				Point3(213.0, 554.0, 227.0),
 				Vector3(130.0, 0.0, 0.0),
 				Vector3(0.0, 0.0, 105.0),
 				nullptr);
+		}
+		else if (sceneId == 12)
+		{
+			// === 3권 12장 === 광원이 둘(천장 광원 + 유리 구)이면 리스트째로 샘플링한다.
+			// HittableList가 소유(bOwns=true)하므로 FreeWorld에서 *lights 하나만 지우면
+			// 내부 사각형·구와 배열까지 연쇄 해제된다.
+			Hittable** lightList = new Hittable*[2];
+			lightList[0] = new Quad(
+				Point3(213.0, 554.0, 227.0),
+				Vector3(130.0, 0.0, 0.0),
+				Vector3(0.0, 0.0, 105.0),
+				nullptr);
+			lightList[1] = new Sphere(Point3(190.0, 90.0, 190.0), 90.0, nullptr);
+			*lights = new HittableList(lightList, 2, true);
 		}
 		else
 		{
@@ -722,7 +781,7 @@ __global__ void FreeWorld(
 }
 
 // CreateWorld가 아는 가장 큰 장면 번호
-static const int kMaxSceneId = 10;
+static const int kMaxSceneId = 12;
 
 int main(int argc, char** argv)
 {
@@ -738,7 +797,9 @@ int main(int argc, char** argv)
 	//   8: cornell_smoke      — 두 상자를 연기/안개 볼륨으로 (ConstantMedium)
 	//   9: final_scene        — 모든 기능을 모은 최종 장면 (2권 Listing 74)
 	//  10: cornell_box(3권)   — The Rest of Your Life의 기준 코넬 박스
-	int sceneId = 10;
+	//  11: cornell_aluminum   — 키 큰 상자를 금속으로 (3권 12장)
+	//  12: cornell_glass      — 키 작은 상자 대신 유리 구 (3권 12장)
+	int sceneId = 12;
 	int numSamples = -1;            // -1이면 아래에서 장면별 기본값을 쓴다
 	bool bStratify = true;          // 3권 2장: 픽셀 안 층화 샘플링
 	bool bSampleLight = true;       // 3권 9장: 광원 직접 샘플링(3권 코넬 박스에만 적용)
@@ -943,6 +1004,14 @@ int main(int argc, char** argv)
 		{
 			size_t pixelIndex = j * imageWidth + i;
 			Color col = frameBuffer[pixelIndex];
+
+			// === The Rest of Your Life Chapter 12: NaN 걸러내기 ===
+			// 몬테카를로 렌더러에서는 수천만 레이에 한 번쯤 NaN이 나올 수 있다. 평균에
+			// NaN이 하나 섞이면 그 픽셀 전체가 죽어 검은 점(acne)으로 남는다.
+			// NaN은 자기 자신과 같지 않다는 성질을 이용해 걸러 0으로 바꾼다.
+			if (col.X() != col.X()) col[0] = 0.0;
+			if (col.Y() != col.Y()) col[1] = 0.0;
+			if (col.Z() != col.Z()) col[2] = 0.0;
 
 			// [0,1)로 클램프 후 [0,255]로 변환.
 			// 발광 재질(빛)은 색이 1.0을 넘을 수 있어, 클램프하지 않으면

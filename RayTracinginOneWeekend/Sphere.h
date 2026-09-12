@@ -3,6 +3,8 @@
 #define SPHERE_H
 
 #include "Hittable.h"
+#include "Onb.h"
+#include "Sampling.h"
 
 class Sphere : public Hittable
 {
@@ -63,6 +65,41 @@ public:
     }
 
     __device__ Aabb BoundingBox() const override { return mBBox; }
+
+    // === The Rest of Your Life Chapter 12: 구를 향한 샘플링 ===
+    //
+    // 바깥의 한 점에서 구를 보면 구는 원뿔 모양의 입체각을 차지한다. 그 원뿔 안에서
+    // 균일하게 뽑으므로 밀도는 1 / (원뿔의 입체각)이다.
+    //   입체각 = 2 pi (1 - cos(theta_max)),   sin(theta_max) = R / 거리
+    // (구 표면에서 아무 점이나 고르면 뒤쪽 면을 고를 수 있어 못 쓴다. 보이는 쪽만
+    //  균일하게 덮는 것이 이 원뿔 샘플링이다.)
+    __device__ double PdfValue(
+        const Point3& origin, const Vector3& direction, curandState* randState) const override
+    {
+        // 정지한 구에만 유효하다(MovingSphere는 샘플링 대상이 아니다).
+        HitRecord rec;
+        if (!this->Hit(Ray(origin, direction), 0.001, DBL_MAX, rec, randState))
+            return 0.0;
+
+        double distanceSquared = (mCenter - origin).LengthSquared();
+        if (distanceSquared <= mRadius * mRadius)
+            return 0.0;   // 구 안에서는 이 공식이 성립하지 않는다
+
+        double cosThetaMax = sqrt(1.0 - mRadius * mRadius / distanceSquared);
+        double solidAngle = 2.0 * kPi * (1.0 - cosThetaMax);
+
+        return 1.0 / solidAngle;
+    }
+
+    __device__ Vector3 Random(const Point3& origin, curandState* randState) const override
+    {
+        Vector3 direction = mCenter - origin;
+        double distanceSquared = direction.LengthSquared();
+
+        // z축이 구 중심 방향인 좌표계에서 뽑아 ONB로 돌린다.
+        Onb uvw(direction);
+        return uvw.Transform(RandomToSphere(mRadius, distanceSquared, randState));
+    }
 
     // 원점 중심 단위 구 위의 점 p에 대한 (u,v) 텍스처 좌표를 구한다.
     //  u: Y축을 도는 각(경도). X=-1에서 0, 한 바퀴 돌아 1.

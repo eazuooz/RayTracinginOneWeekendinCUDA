@@ -112,6 +112,7 @@ copy /Y "$(ProjectDir)output.ppm" "$(SolutionDir)output.ppm"</Command>
     <ClInclude Include="Metal.h" />
     <ClInclude Include="Onb.h" />
     <ClInclude Include="Pdf.h" />
+    <ClInclude Include="Sampling.h" />
     <ClInclude Include="MonteCarloDemo.h" />
     <ClInclude Include="DemoThrust.h" />
     <ClInclude Include="Perlin.h" />
