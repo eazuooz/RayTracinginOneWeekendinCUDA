@@ -35,6 +35,9 @@ public:
         mD = Dot(mNormal, mQ);
         mW = n / Dot(n, n);
 
+        // === 3권 10장 === 평행사변형의 넓이 = |u x v|. 광원 샘플링 밀도에 쓴다.
+        mArea = n.Length();
+
         SetBoundingBox();
     }
 
@@ -98,6 +101,35 @@ public:
         return true;
     }
 
+    // === The Rest of Your Life Chapter 10: 이 사각형을 향한 샘플링 ===
+    //
+    // origin에서 direction 방향을 봤을 때의 밀도(입체각 기준):
+    //   p(w) = 거리^2 / (cos(theta) * 넓이)
+    // 9장에서 손으로 계산하던 식을 사각형 자신이 계산하게 옮긴 것이다.
+    // 그 방향이 이 사각형을 맞히지 못하면 밀도는 0이다.
+    __device__ double PdfValue(
+        const Point3& origin, const Vector3& direction, curandState* randState) const override
+    {
+        HitRecord rec;
+        if (!this->Hit(Ray(origin, direction), 0.001, DBL_MAX, rec, randState))
+            return 0.0;
+
+        double distanceSquared = rec.T * rec.T * direction.LengthSquared();
+        double cosine = fabs(Dot(direction, rec.Normal) / direction.Length());
+        if (cosine < 1e-8)
+            return 0.0;
+
+        return distanceSquared / (cosine * mArea);
+    }
+
+    // origin에서 이 사각형 위의 무작위 한 점으로 향하는 벡터.
+    __device__ Vector3 Random(const Point3& origin, curandState* randState) const override
+    {
+        Point3 p = mQ + (double(curand_uniform(randState)) * mU)
+                      + (double(curand_uniform(randState)) * mV);
+        return p - origin;
+    }
+
 private:
     Point3 mQ;
     Vector3 mU;
@@ -107,6 +139,7 @@ private:
     Aabb mBBox;
     Vector3 mNormal;   // 단위 법선
     double mD;         // 평면 상수: normal·Q
+    double mArea;      // |u x v| (3권 10장, 광원 샘플링)
 };
 
 #endif

@@ -62,6 +62,22 @@ public:
     // BVH 내부 노드 여부. BvhNode가 반복(iterative) 순회 중 자식이 내부 노드인지
     // 잎(primitive)인지 구분하는 데 쓴다. 기본값은 false(잎/일반 오브젝트).
     __device__ virtual bool IsBvhNode() const { return false; }
+
+    // === The Rest of Your Life Chapter 10: 이 물체를 향해 샘플링하기 ===
+    // origin에서 이 물체 쪽으로 방향을 뽑고, 그 방향의 밀도를 돌려줄 수 있어야
+    // 광원 중요도 샘플링을 할 수 있다. 모든 파생 클래스가 구현할 필요는 없으므로
+    // (원서와 같이) 기본 구현을 둔다 — 샘플링 대상이 아닌 물체는 밀도 0이다.
+    __device__ virtual double PdfValue(
+        const Point3& origin, const Vector3& direction, curandState* randState) const
+    {
+        return 0.0;
+    }
+
+    // origin에서 이 물체 위의 무작위 한 점으로 향하는 벡터(정규화되지 않음).
+    __device__ virtual Vector3 Random(const Point3& origin, curandState* randState) const
+    {
+        return Vector3(1.0, 0.0, 0.0);
+    }
 };
 
 #endif

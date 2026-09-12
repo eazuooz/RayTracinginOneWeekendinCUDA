@@ -26,6 +26,7 @@
 #include "Dielectric.h"
 #include "Camera.h"
 #include "RtwImage.h"
+#include "Pdf.h"
 #include "MonteCarloDemo.h"
 
 // CUDA 에러 체크 매크로
@@ -66,7 +67,7 @@ void CheckCuda(cudaError_t result, char const* const func, const char* const fil
 // 아무것도 맞추지 못하면 배경색을 throughput에 실어 더한 뒤 반환한다.
 // (background가 (0,0,0)이면 장면의 유일한 빛은 발광 재질뿐이다.)
 __device__ Color RayColor(
-	const Ray& r, const Color& background, Hittable** world,
+	const Ray& r, const Color& background, Hittable** world, Hittable** lights,
 	bool bSampleLight, curandState* randState)
 {
 	Ray currentRay = r;
@@ -106,49 +107,50 @@ __device__ Color RayColor(
 		// 둘이 약분되어 곱해지는 값은 결국 감쇠뿐이다(그림은 그대로여야 정상).
 		// ScatteringPdf를 정의하지 않은 재질(0을 돌려주는 Metal/Dielectric/Isotropic)은
 		// 원서 12장의 skip_pdf처럼 f/p 가중 없이 감쇠만 곱한다.
-		// === The Rest of Your Life Chapter 9: 광원 직접 샘플링 (하드코딩 버전) ===
-		// 재질이 정한 방향 대신 "천장 광원 위의 무작위 점"으로 레이를 보낸다. 광원을
-		// 맞힐 확률이 1이 되므로 노이즈가 급감한다. 대신 밀도가 달라지므로 입체각 기준
-		// 밀도로 바꿔 나눠 줘야 한다:
-		//     p(w) = 거리^2 / (cos(theta_light) * 광원 넓이)
-		// (광원 위에서 균일하게 뽑으면 면적 기준 밀도가 1/A이고, 면적 dA가 단위 구에
-		//  투영되면 dw = dA * cos / 거리^2 이므로 위 식이 나온다.)
+		// === The Rest of Your Life Chapter 10: 혼합 밀도 (Mixture Density) ===
+		// 9장의 "광원만 샘플링"은 노이즈를 크게 줄였지만 직접광만 남기고 적분의 나머지를
+		// 버렸다(그림이 어두워졌다). 이제 두 PDF를 반반 섞어 둘 다 살린다.
+		//   pLight   : 광원 쪽으로 (HittablePdf) — 작은 광원을 확실히 맞힌다
+		//   pSurface : 재질의 분포 (CosinePdf)   — 간접광과 색 번짐을 살린다
+		// 어느 쪽에서 뽑았든 그 방향의 밀도는 두 밀도의 평균이다
+		// (같은 방향을 양쪽이 만들 수 있으므로 "어디서 나왔는지"는 알 필요가 없다).
 		//
-		// ※ 이 버전은 scene 10의 광원 좌표를 코드에 박아 둔 임시 구현이다. 10장에서
-		//   PDF 클래스로 정리하고, 표면 PDF와 섞어서 거울/유리도 다시 살린다.
-		if (bSampleLight && pdfValue > 0.0)
+		// CUDA 메모: PDF 객체는 전부 스택에 만든다(바운스마다 디바이스 new를 하면
+		// 매우 느리고 힙도 금방 바닥난다). 광원이 없는 장면(1·2권)이나 델타 분포
+		// 재질(pdfValue == 0)은 이 경로를 타지 않고 예전 그대로 동작한다.
+		if (bSampleLight && lights != nullptr && *lights != nullptr && pdfValue > 0.0)
 		{
-			// 광원 사각형 (x: 213~343, y: 554, z: 227~332) 위의 한 점
-			double lightX = 213.0 + 130.0 * curand_uniform(randState);
-			double lightZ = 227.0 + 105.0 * curand_uniform(randState);
-			Point3 onLight(lightX, 554.0, lightZ);
+			CosinePdf surfacePdf(rec.Normal);
+			HittablePdf lightPdf(*lights, rec.P, randState);
+			MixturePdf mixedPdf(&lightPdf, &surfacePdf);
 
-			Vector3 toLight = onLight - rec.P;
-			double distanceSquared = toLight.LengthSquared();
-			toLight = UnitVector(toLight);
+			Vector3 direction = mixedPdf.Generate(randState);
+			scattered = Ray(rec.P, direction, currentRay.Time());
+			pdfValue = mixedPdf.Value(direction);
 
-			// 표면 뒤쪽에 있는 광원으로는 보낼 수 없다.
-			if (Dot(toLight, rec.Normal) < 0.0)
+			// 밀도가 0인 방향(광원을 등지는 방향 등)은 기여를 계산할 수 없다.
+			if (!(pdfValue > 0.0))
 				return accumulated;
-
-			double lightArea = (343.0 - 213.0) * (332.0 - 227.0);
-			double lightCosine = fabs(toLight.Y());   // 광원 법선은 y축
-			if (lightCosine < 0.000001)
-				return accumulated;
-
-			pdfValue = distanceSquared / (lightCosine * lightArea);
-			scattered = Ray(rec.P, toLight, currentRay.Time());
 		}
 
 		double scatteringPdf = rec.MaterialPtr->ScatteringPdf(currentRay, rec, scattered);
-		if (scatteringPdf > 0.0 && pdfValue > 0.0)
+		if (pdfValue > 0.0)
 		{
-			// 8장부터 pdfValue는 재질이 알려준 "실제로 뽑은 분포의 밀도"다.
-			// (Lambertian은 pScatter와 같은 분포로 뽑으므로 여전히 약분되어 1이 된다.)
+			// 확률적으로 산란하는 재질(Lambertian/Isotropic).
+			// pdfValue는 "실제로 뽑은 분포의 밀도"다(8장: 재질이, 10장부터는 혼합 PDF가 알려준다).
+			//
+			// ※ 10장에서 실제로 부딪힌 버그: 혼합 PDF는 광원 쪽 방향을 뽑기 때문에 표면
+			//   아래(수평선 뒤)를 향하는 방향도 나올 수 있다. 그때 pScatter는 0이고, 그
+			//   샘플의 기여도 0이어야 한다. 이 경우를 아래 "델타 분포" 분기로 흘려보내면
+			//   감쇠만 곱한 채 레이가 계속 나아가 에너지가 부풀어 오른다(그림이 6배 밝아졌다).
+			if (!(scatteringPdf > 0.0))
+				return accumulated;
+
 			throughput = throughput * attenuation * (scatteringPdf / pdfValue);
 		}
 		else
 		{
+			// 델타 분포 재질(Metal/Dielectric): 밀도로 나눌 수 없으므로 감쇠만 곱한다.
 			throughput = throughput * attenuation;
 		}
 		currentRay = scattered;
@@ -188,7 +190,8 @@ __global__ void RenderInit(int maxX, int maxY, curandState* randState)
 // 이중 루프만 바꾸면 된다.
 __global__ void Render(
 	Vector3* frameBuffer, int maxX, int maxY, int sqrtSpp, bool bStratify,
-	bool bSampleLight, Camera** camera, Hittable** world, curandState* randState)
+	bool bSampleLight, Camera** camera, Hittable** world, Hittable** lights,
+	curandState* randState)
 {
 	int i = threadIdx.x + blockIdx.x * blockDim.x;
 	int j = threadIdx.y + blockIdx.y * blockDim.y;
@@ -227,7 +230,7 @@ __global__ void Render(
 			double u = (double(i) + px) / double(maxX);
 			double v = (double(j) + py) / double(maxY);
 			Ray r = (*camera)->GetRay(u, v, &localRandState);
-			col += RayColor(r, background, world, bSampleLight, &localRandState);
+			col += RayColor(r, background, world, lights, bSampleLight, &localRandState);
 		}
 	}
 
@@ -266,7 +269,8 @@ __global__ void CreateWorld(
 	Hittable** list, Hittable** world, Camera** camera,
 	int imageWidth, int imageHeight, curandState* randState, int* outCount,
 	Hittable** bvhNodes, int* outNodeCount,
-	int sceneId, const unsigned char* earthData, int earthW, int earthH)
+	int sceneId, const unsigned char* earthData, int earthW, int earthH,
+	Hittable** lights)
 {
 	if (threadIdx.x == 0 && blockIdx.x == 0)
 	{
@@ -656,6 +660,23 @@ __global__ void CreateWorld(
 		*outNodeCount = nodeCount;
 		*world = root;
 
+		// === The Rest of Your Life Chapter 10: 광원 샘플링 대상 ===
+		// 3권 코넬 박스의 천장 광원과 같은 사각형을 하나 더 만들어 "이쪽으로 레이를
+		// 보내라"는 대상으로 쓴다. 밀도 계산과 점 뽑기에만 쓰이므로 재질은 필요 없다.
+		// (월드에 넣지 않으므로 BVH나 화면에는 영향이 없다.)
+		if (sceneId == 10)
+		{
+			*lights = new Quad(
+				Point3(213.0, 554.0, 227.0),
+				Vector3(130.0, 0.0, 0.0),
+				Vector3(0.0, 0.0, 105.0),
+				nullptr);
+		}
+		else
+		{
+			*lights = nullptr;
+		}
+
 		// === 카메라 (장면별 파라미터로 공통 생성) ===
 		*camera = new Camera(
 			lookfrom,
@@ -677,7 +698,7 @@ __global__ void CreateWorld(
 __global__ void FreeWorld(
 	Hittable** list, int numHittables,
 	Hittable** bvhNodes, int numNodes,
-	Hittable** world, Camera** camera)
+	Hittable** world, Camera** camera, Hittable** lights)
 {
 	if (threadIdx.x == 0 && blockIdx.x == 0)
 	{
@@ -693,6 +714,10 @@ __global__ void FreeWorld(
 			delete bvhNodes[i];
 		}
 		delete *camera;
+
+		// 3권 10장: 광원 샘플링용 사각형(월드와 별개로 만든 것)
+		if (*lights != nullptr)
+			delete *lights;
 	}
 }
 
@@ -842,6 +867,10 @@ int main(int argc, char** argv)
 	Camera** camera;
 	checkCudaErrors(cudaMalloc((void**)&camera, sizeof(Camera*)));
 
+	// 3권 10장: 광원 샘플링 대상(없는 장면이면 nullptr)
+	Hittable** lights;
+	checkCudaErrors(cudaMalloc((void**)&lights, sizeof(Hittable*)));
+
 	// BVH 노드 레지스트리: n개 잎에 대한 BVH 내부 노드 수는 최대 2n 미만이므로
 	// 넉넉하게 2*maxHittables 크기로 잡는다 (해제 시 이 배열을 순회).
 	Hittable** bvhNodes;
@@ -874,7 +903,7 @@ int main(int argc, char** argv)
 	}
 
 	CreateWorld<<<1, 1>>>(list, world, camera, imageWidth, imageHeight, randState2, d_numHittables, bvhNodes, d_numNodes,
-		sceneId, earthData, earthW, earthH);
+		sceneId, earthData, earthW, earthH, lights);
 	checkCudaErrors(cudaGetLastError());
 	checkCudaErrors(cudaDeviceSynchronize());
 
@@ -893,7 +922,7 @@ int main(int argc, char** argv)
 
 	Render<<<blocks, threads>>>(
 		frameBuffer, imageWidth, imageHeight,
-		sqrtSpp, bStratify, bSampleLight, camera, world, randState);
+		sqrtSpp, bStratify, bSampleLight, camera, world, lights, randState);
 	checkCudaErrors(cudaGetLastError());
 	checkCudaErrors(cudaDeviceSynchronize());
 
@@ -933,7 +962,7 @@ int main(int argc, char** argv)
 	std::cerr << "\nDone. Saved to " << outPath << "\n";
 
 	// GPU 메모리 해제
-	FreeWorld<<<1, 1>>>(list, numHittables, bvhNodes, numNodes, world, camera);
+	FreeWorld<<<1, 1>>>(list, numHittables, bvhNodes, numNodes, world, camera, lights);
 	checkCudaErrors(cudaGetLastError());
 	checkCudaErrors(cudaDeviceSynchronize());
 
@@ -943,6 +972,7 @@ int main(int argc, char** argv)
 	checkCudaErrors(cudaFree(bvhNodes));
 	checkCudaErrors(cudaFree(world));
 	checkCudaErrors(cudaFree(camera));
+	checkCudaErrors(cudaFree(lights));
 	checkCudaErrors(cudaFree(d_numHittables));
 	checkCudaErrors(cudaFree(d_numNodes));
 	checkCudaErrors(cudaFree(frameBuffer));
