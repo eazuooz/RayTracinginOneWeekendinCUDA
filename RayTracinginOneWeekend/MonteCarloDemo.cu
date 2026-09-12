@@ -920,6 +920,224 @@ static void DemoFurnace()
 }
 
 // ─────────────────────────────────────────────────────────────────────
+// 7장: 무작위 방향 만들기 (역변환법)
+// ─────────────────────────────────────────────────────────────────────
+// 3장에서 1차원 PDF를 "CDF의 역함수"로 뒤집어 샘플링했다. 방향도 같은 방법으로 만든다.
+// z축 대칭 분포라면 phi는 균일하고(phi = 2 pi r1), theta는 분포마다 다음과 같다.
+//   균일 구면        : cos(theta) = 1 - 2 r2
+//   균일 반구        : cos(theta) = 1 - r2
+//   코사인(Lambert)  : cos(theta) = sqrt(1 - r2)
+// 그리고 x = cos(phi) sin(theta), y = sin(phi) sin(theta), z = cos(theta).
+//
+// 거절법과 달리 루프가 없다. 워프 안 모든 레인이 정확히 같은 일을 같은 횟수만큼 하므로
+// 4장에서 본 "워프가 가장 느린 레인을 기다리는" 손해가 사라진다.
+
+__device__ inline Vector3 RandomUnitVectorInversion(DemoRng* rng)
+{
+	double r1 = RandomDouble(rng);
+	double r2 = RandomDouble(rng);
+	double z = 1.0 - 2.0 * r2;                      // cos(theta)
+	double r = sqrt(fmax(0.0, 1.0 - z * z));        // sin(theta)
+	double phi = 2.0 * kPi * r1;
+	return Vector3(cos(phi) * r, sin(phi) * r, z);
+}
+
+__device__ inline Vector3 RandomHemisphereDirectionInversion(DemoRng* rng)
+{
+	double r1 = RandomDouble(rng);
+	double r2 = RandomDouble(rng);
+	double z = 1.0 - r2;                            // cos(theta), [0,1] → 수평선 위쪽만
+	double r = sqrt(fmax(0.0, 1.0 - z * z));
+	double phi = 2.0 * kPi * r1;
+	return Vector3(cos(phi) * r, sin(phi) * r, z);
+}
+
+__device__ inline Vector3 RandomCosineDirectionDemo(DemoRng* rng)
+{
+	double r1 = RandomDouble(rng);
+	double r2 = RandomDouble(rng);
+	double z = sqrt(1.0 - r2);                      // cos(theta)
+	double r = sqrt(r2);                            // sin(theta) = sqrt(1 - z^2)
+	double phi = 2.0 * kPi * r1;
+	return Vector3(cos(phi) * r, sin(phi) * r, z);
+}
+
+enum DirCaseId
+{
+	kDirSphereCos2 = 0,   // 구 전체에서 cos^2     , p = 1/(4 pi)  → 4 pi / 3
+	kDirHemiCos3,         // 반구에서 cos^3        , p = 1/(2 pi)  → pi / 2
+	kDirCosineCos3,       // 반구에서 cos^3        , p = cos/pi    → pi / 2 (분산이 훨씬 작다)
+	kDirCaseCount
+};
+
+__global__ void DirectionIntegrateKernel(
+	unsigned long long seed, int caseId, int numThreads, int samplesPerThread,
+	double* partialSums, double* partialSumSquares)
+{
+	int id = blockIdx.x * blockDim.x + threadIdx.x;
+	if (id >= numThreads) return;
+
+	DemoRng rng;
+	curand_init(seed, id, 0, &rng);
+
+	double sum = 0.0;
+	double sumSq = 0.0;
+	for (int k = 0; k < samplesPerThread; k++)
+	{
+		double g = 0.0;
+		if (caseId == kDirSphereCos2)
+		{
+			double c = RandomUnitVectorInversion(&rng).Z();
+			g = (c * c) * (4.0 * kPi);                  // f / p,  p = 1/(4 pi)
+		}
+		else if (caseId == kDirHemiCos3)
+		{
+			double c = RandomHemisphereDirectionInversion(&rng).Z();
+			g = (c * c * c) * (2.0 * kPi);              // f / p,  p = 1/(2 pi)
+		}
+		else
+		{
+			double c = RandomCosineDirectionDemo(&rng).Z();
+			g = (c > 0.0) ? (c * c * c) / (c / kPi) : 0.0;   // f / p,  p = cos/pi
+		}
+		sum += g;
+		sumSq += g * g;
+	}
+	partialSums[id] = sum;
+	partialSumSquares[id] = sumSq;
+}
+
+// 거절법 vs 역변환법의 순수 생성 비용 비교.
+//
+// ※ 마이크로벤치마크 주의: 결과를 쓰지 않으면 컴파일러가 생성 코드를 통째로 지운다.
+//   게다가 z성분만 더하면, 역변환법은 z = 1 - 2*r2 라서 phi/sin/cos/sqrt 계산이
+//   전부 죽은 코드가 되어 버린다(실제로 그렇게 재 보니 27배라는 엉터리 수치가 나왔다).
+//   그래서 세 성분을 모두 더해 어느 쪽도 계산을 건너뛸 수 없게 한다.
+__global__ void DirectionThroughputKernel(
+	unsigned long long seed, bool bRejection, int numThreads, int samplesPerThread,
+	double* partialSums)
+{
+	int id = blockIdx.x * blockDim.x + threadIdx.x;
+	if (id >= numThreads) return;
+
+	DemoRng rng;
+	curand_init(seed, id, 0, &rng);
+
+	double sum = 0.0;
+	for (int k = 0; k < samplesPerThread; k++)
+	{
+		Vector3 d;
+		if (bRejection)
+		{
+			int tries;
+			d = RandomUnitVectorRejection(&rng, tries);
+		}
+		else
+		{
+			d = RandomUnitVectorInversion(&rng);
+		}
+		sum += d.X() + d.Y() + d.Z();
+	}
+	partialSums[id] = sum;
+}
+
+// 그림용: 균일 구면 방향 몇 개를 호스트로 가져와 CSV로 찍는다(원서의 plot.ly 산점도).
+__global__ void SamplePointsKernel(unsigned long long seed, int count, Vector3* points)
+{
+	int id = blockIdx.x * blockDim.x + threadIdx.x;
+	if (id >= count) return;
+
+	DemoRng rng;
+	curand_init(seed, id, 0, &rng);
+	points[id] = RandomUnitVectorInversion(&rng);
+}
+
+static void DemoDirections()
+{
+	const int numThreads = 1 << 20;
+	const int samplesPerThread = 16;
+	const double n = double(numThreads) * double(samplesPerThread);
+	const int threadsPerBlock = 256;
+	const int blocks = (numThreads + threadsPerBlock - 1) / threadsPerBlock;
+
+	double* dSums;
+	double* dSumSquares;
+	checkDemoErrors(cudaMalloc((void**)&dSums, numThreads * sizeof(double)));
+	checkDemoErrors(cudaMalloc((void**)&dSumSquares, numThreads * sizeof(double)));
+
+	const char* names[kDirCaseCount] =
+	{
+		"cos^2 over sphere,   p = 1/4pi",
+		"cos^3 over hemi,     p = 1/2pi",
+		"cos^3 over hemi,     p = cos/pi"
+	};
+	const double exact[kDirCaseCount] = { 4.0 * kPi / 3.0, kPi / 2.0, kPi / 2.0 };
+
+	printf("[dirs] inversion-method directions, N = %.0f per case\n", n);
+	printf("%-34s  %14s  %14s  %14s  %14s\n", "case", "estimate", "exact", "|error|", "stddev/sample");
+	for (int c = 0; c < kDirCaseCount; c++)
+	{
+		DirectionIntegrateKernel<<<blocks, threadsPerBlock>>>(
+			300 + c, c, numThreads, samplesPerThread, dSums, dSumSquares);
+		checkDemoErrors(cudaGetLastError());
+
+		double mean = DeviceSum(dSums, numThreads) / n;
+		double meanSq = DeviceSum(dSumSquares, numThreads) / n;
+		double stddev = sqrt(fmax(0.0, meanSq - mean * mean));
+		printf("%-34s  %14.9f  %14.9f  %14.9f  %14.9f\n",
+			names[c], mean, exact[c], fabs(mean - exact[c]), stddev);
+	}
+
+	// --- 생성 비용: 거절법 vs 역변환법 ---
+	cudaEvent_t start, stop;
+	checkDemoErrors(cudaEventCreate(&start));
+	checkDemoErrors(cudaEventCreate(&stop));
+
+	float milliseconds[2] = { 0.0f, 0.0f };
+	for (int pass = 0; pass < 2; pass++)
+	{
+		bool bRejection = (pass == 0);
+
+		// 워밍업(첫 실행의 JIT/캐시 효과 제거)
+		DirectionThroughputKernel<<<blocks, threadsPerBlock>>>(1, bRejection, numThreads, samplesPerThread, dSums);
+		checkDemoErrors(cudaDeviceSynchronize());
+
+		checkDemoErrors(cudaEventRecord(start));
+		DirectionThroughputKernel<<<blocks, threadsPerBlock>>>(2, bRejection, numThreads, samplesPerThread, dSums);
+		checkDemoErrors(cudaEventRecord(stop));
+		checkDemoErrors(cudaEventSynchronize(stop));
+		checkDemoErrors(cudaEventElapsedTime(&milliseconds[pass], start, stop));
+	}
+
+	printf("\ngenerating %.0f directions\n", n);
+	printf("  rejection method  : %8.2f ms   (%6.2f G dir/s)\n",
+		milliseconds[0], n / (milliseconds[0] * 1.0e6));
+	printf("  inversion method  : %8.2f ms   (%6.2f G dir/s)\n",
+		milliseconds[1], n / (milliseconds[1] * 1.0e6));
+	printf("  speedup           : %8.2fx\n", milliseconds[0] / milliseconds[1]);
+
+	checkDemoErrors(cudaEventDestroy(start));
+	checkDemoErrors(cudaEventDestroy(stop));
+	checkDemoErrors(cudaFree(dSums));
+	checkDemoErrors(cudaFree(dSumSquares));
+
+	// --- 산점도용 점 200개 ---
+	const int pointCount = 200;
+	Vector3* dPoints;
+	checkDemoErrors(cudaMalloc((void**)&dPoints, pointCount * sizeof(Vector3)));
+	SamplePointsKernel<<<1, pointCount>>>(4242, pointCount, dPoints);
+	checkDemoErrors(cudaGetLastError());
+
+	Vector3 points[pointCount];
+	checkDemoErrors(cudaMemcpy(points, dPoints, sizeof(points), cudaMemcpyDeviceToHost));
+	checkDemoErrors(cudaFree(dPoints));
+
+	printf("\n# %d random directions on the unit sphere (x,y,z)\n", pointCount);
+	for (int i = 0; i < pointCount; i++)
+		printf("%.6f,%.6f,%.6f\n", points[i].X(), points[i].Y(), points[i].Z());
+}
+
+// ─────────────────────────────────────────────────────────────────────
 // 진입점
 // ─────────────────────────────────────────────────────────────────────
 
@@ -960,6 +1178,11 @@ bool RunMonteCarloDemo(const char* name)
 		DemoFurnace();
 		return true;
 	}
+	if (strcmp(name, "dirs") == 0)
+	{
+		DemoDirections();
+		return true;
+	}
 
 	return false;
 }
@@ -974,4 +1197,5 @@ void PrintMonteCarloDemoList()
 	fprintf(stderr, "  sphere     ch.4  integrate cos^2 over the unit sphere (rejection-sampled directions)\n");
 	fprintf(stderr, "  lambert    ch.5  Lambertian scattering PDF: normalization + cos(theta) histograms\n");
 	fprintf(stderr, "  furnace    ch.6  white furnace test of the f/p estimator for several sampling choices\n");
+	fprintf(stderr, "  dirs       ch.7  inversion-method directions: integrals, variance, rejection-vs-inversion cost\n");
 }

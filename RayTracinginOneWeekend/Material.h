@@ -42,6 +42,24 @@ __device__ inline Vector3 RandomUnitVector(curandState* randState)
     }
 }
 
+// === The Rest of Your Life Chapter 7: 역변환법으로 코사인 분포 방향 만들기 ===
+// 거절법(RandomInUnitSphere / RandomUnitVector)과 달리 루프가 없다. 난수 두 개로
+// 바로 계산하므로 워프 안 모든 레인이 같은 시간에 끝난다(GPU에 유리).
+//   phi = 2 pi r1,  cos(theta) = sqrt(1 - r2)  ← cos(theta)/pi 분포의 CDF를 뒤집은 것
+// 여기서 나오는 방향은 "z축이 법선"인 좌표계 기준이다. 8장에서 정규직교 기저(ONB)로
+// 실제 법선 방향에 맞춰 돌린다.
+__device__ inline Vector3 RandomCosineDirection(curandState* randState)
+{
+    double r1 = curand_uniform_double(randState);
+    double r2 = curand_uniform_double(randState);
+
+    double phi = 2.0 * kPi * r1;
+    double z = sqrt(1.0 - r2);     // cos(theta)
+    double r = sqrt(r2);           // sin(theta)
+
+    return Vector3(cos(phi) * r, sin(phi) * r, z);
+}
+
 // 재질 기본 클래스
 class Material
 {
