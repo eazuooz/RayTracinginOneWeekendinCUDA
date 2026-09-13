@@ -1,7 +1,7 @@
 # Generating Random Directions (무작위 방향 만들기) — CUDA 적용판
 
 > *Ray Tracing: The Rest of Your Life* 7장을 우리 **CUDA + 레이트레이싱 프로젝트** 기준으로 정리한 문서.
-> 원서의 흐름(z축 기준 방향 → 균일 반구 → 코사인 반구)을 따라가되 설명은 요약·재구성했고, 코드는 전부 우리 GPU 코드다. 실제로 빌드·실행해 수치를 확인했다.
+> 원서의 논지를 빠짐없이 따라가되 설명은 우리 말로 다시 썼고, 코드는 전부 우리 GPU 코드다. 실제로 빌드·실행해 수치를 확인했다.
 > 원서: <https://raytracing.github.io/books/RayTracingTheRestOfYourLife.html> (v4.0.2) · 코드 커밋 `a83ec5f`
 
 ---
@@ -16,27 +16,85 @@
 
 ## z축 기준으로 방향 만들기
 
-거절법(뽑고 버리기) 말고 3장의 **역변환법**으로 방향을 만들어 보자. 계산을 단순하게 하려고 **z축을 법선으로 두고**, z축에 대해 회전 대칭인 분포만 다룬다. 그러면 방향의 PDF는 θ만의 함수다: $p(\omega) = f(\theta)$.
+이 장부터 세 장에 걸쳐 하는 일은 새 기능을 붙이는 것이 아니라 **이해와 도구를 단단하게 만드는 것**이다. 먼저 무작위 방향을 만드는 방법부터 정리한다.
+
+우리에게는 이미 **거절법**(뽑고 버리기)으로 방향을 만드는 방법이 있다. 이번에는 3장에서 배운 **역변환법**으로 만들어 본다. 계산을 단순하게 하려고 **z축을 표면 법선으로 두고**, θ는 법선에서 잰 각으로 둔다. 이 장에서는 모든 것을 z축 기준으로 세우고, **다음 장(8장)에서 실제 법선 방향에 맞춰 돌린다.**
+
+그리고 우리가 다룰 분포는 전부 **z축에 대해 회전 대칭**이다. 즉 방향의 PDF는 φ에 무관하고 θ만의 함수다.
+
+$$ p(\omega) = f(\theta) $$
 
 이때 φ와 θ 각각의 1차원 PDF는 다음과 같다.
 
 $$ a(\phi) = \frac{1}{2\pi}, \qquad b(\theta) = 2\pi f(\theta)\sin\theta $$
 
-φ 쪽은 균일하므로 $r_1$을 그대로 늘리면 된다: $\phi = 2\pi r_1$. θ 쪽은 CDF를 적분해서 뒤집는다.
+$b(\theta)$에 $\sin\theta$가 붙는 이유는 4장에서 본 대로 구면 좌표의 넓이 조각이 $d\omega = \sin\theta\,d\theta\,d\phi$ 이기 때문이다. 극 근처(θ가 0에 가까움)는 같은 θ 폭이라도 실제 넓이가 작다.
 
-$$ r_2 = \int_0^{\theta} 2\pi f(\theta')\sin\theta'\,d\theta' $$
+### φ: 직관 그대로
 
-세 가지 분포에 대해 이 적분을 풀면 (θ를 직접 구하지 않고 **cos θ만** 구하는 것이 요령이다 — 어차피 직교 좌표로 바꿀 때 필요한 것은 cos θ와 sin θ뿐이라, `acos` 호출을 아낄 수 있다):
+균일 난수 $r_1$, $r_2$ 를 받아 **CDF를 풀고 뒤집는다**. φ부터 하자.
 
-| 분포 | $f(\theta)$ | 결과 |
-|---|---|---|
-| 균일 구면 | $1/4\pi$ | $\cos\theta = 1 - 2r_2$ |
-| 균일 반구 | $1/2\pi$ | $\cos\theta = 1 - r_2$ (수평선 아래로 가지 않음) |
-| 코사인(Lambert) | $\cos\theta/\pi$ | $\cos\theta = \sqrt{1 - r_2}$, $\sin\theta = \sqrt{r_2}$ |
+$$ r_1 = \int_0^{\phi} a(\phi')\,d\phi' = \int_0^{\phi}\frac{1}{2\pi}\,d\phi' = \frac{\phi}{2\pi} $$
 
-직교 좌표로는 공통이다.
+뒤집으면
+
+$$ \boxed{\phi = 2\pi\,r_1} $$
+
+이건 직관과 정확히 일치한다 — φ의 범위가 $[0, 2\pi]$ 이므로 `[0,1]` 난수에 $2\pi$ 를 곱하면 전 범위를 덮는다. θ 쪽은 직관이 잘 안 서므로 식을 차근차근 따라가 보자.
+
+### θ: CDF를 적분해서 뒤집기
+
+$$ r_2 = \int_0^{\theta} b(\theta')\,d\theta' = \int_0^{\theta} 2\pi f(\theta')\sin\theta'\,d\theta' $$
+
+$f$ 자리에 원하는 분포를 넣고 풀면 된다. 세 가지를 차례로 해 보자.
+
+**① 구 전체 균일.** 단위 구의 넓이가 $4\pi$ 이므로 $p(\omega) = f(\theta) = 1/4\pi$ 다.
+
+$$ r_2 = \int_0^{\theta} 2\pi\cdot\frac{1}{4\pi}\sin\theta'\,d\theta' = \int_0^{\theta}\frac{1}{2}\sin\theta'\,d\theta' = \frac{-\cos\theta}{2} - \frac{-\cos 0}{2} = \frac{1-\cos\theta}{2} $$
+
+$$ \boxed{\cos\theta = 1 - 2r_2} $$
+
+> 📝 **θ를 직접 구하지 않는다.** 어차피 직교 좌표로 바꿀 때 필요한 것은 $\cos\theta$ 와 $\sin\theta$ 뿐이다. 여기서 `acos`를 불러 θ를 얻고 다시 `cos`을 부르는 것은 순전한 낭비다. GPU에서는 더욱 그렇다 — 초월 함수는 SFU(special function unit)를 쓰거나 소프트웨어로 풀리므로, 한 번 아끼는 것이 그대로 처리량이 된다.
+
+**② 반구 균일.** $p(\omega) = f(\theta) = 1/2\pi$ 로 상수만 바꾸면 된다.
+
+$$ r_2 = \int_0^{\theta} 2\pi\cdot\frac{1}{2\pi}\sin\theta'\,d\theta' = 1 - \cos\theta \;\Longrightarrow\; \boxed{\cos\theta = 1 - r_2} $$
+
+$r_2$ 가 `[0,1]` 이므로 $\cos\theta$ 는 1에서 0까지, 즉 θ는 0에서 $\pi/2$ 까지만 움직인다. **수평선 아래로는 아무것도 가지 않는다**는 뜻이다.
+
+**③ 코사인 가중(Lambert).** $p(\omega) = f(\theta) = \cos\theta/\pi$ 다.
+
+$$ r_2 = \int_0^{\theta} 2\pi\cdot\frac{\cos\theta'}{\pi}\sin\theta'\,d\theta' = \int_0^{\theta} 2\cos\theta'\sin\theta'\,d\theta' = 1 - \cos^2\theta $$
+
+$$ \boxed{\cos\theta = \sqrt{1 - r_2}} $$
+
+### 직교 좌표로 바꾸기
+
+$(\theta, \phi)$ 방향의 단위 벡터는 공통 공식으로 만든다.
 
 $$ x = \cos\phi\,\sin\theta, \qquad y = \sin\phi\,\sin\theta, \qquad z = \cos\theta $$
+
+$\sin\theta$ 는 항등식 $\cos^2 + \sin^2 = 1$ 로 구한다. 구 전체 균일을 예로 들면
+
+$$ x = \cos(2\pi r_1)\sqrt{1 - (1-2r_2)^2}, \quad y = \sin(2\pi r_1)\sqrt{1 - (1-2r_2)^2}, \quad z = 1 - 2r_2 $$
+
+이고, $(1-2r_2)^2 = 1 - 4r_2 + 4r_2^2$ 이므로 루트 안이 $4r_2(1-r_2)$ 로 정리된다.
+
+$$ x = \cos(2\pi r_1)\cdot 2\sqrt{r_2(1-r_2)}, \quad y = \sin(2\pi r_1)\cdot 2\sqrt{r_2(1-r_2)}, \quad z = 1 - 2r_2 $$
+
+코사인 분포에서도 비슷한 정리가 가능하다. $z = \sqrt{1-r_2}$ 이므로
+
+$$ \sin\theta = \sqrt{1 - z^2} = \sqrt{1 - (1-r_2)} = \sqrt{r_2} $$
+
+즉 **루트 두 번이면 끝**이고, 제곱·뺄셈을 한 번 더 아낀다.
+
+요약하면 이렇다.
+
+| 분포 | $f(\theta)$ | $\cos\theta$ | $\sin\theta$ |
+|---|---|---|---|
+| 균일 구면 | $1/4\pi$ | $1 - 2r_2$ | $2\sqrt{r_2(1-r_2)}$ |
+| 균일 반구 | $1/2\pi$ | $1 - r_2$ (수평선 아래로 가지 않음) | $\sqrt{1 - (1-r_2)^2}$ |
+| 코사인(Lambert) | $\cos\theta/\pi$ | $\sqrt{1 - r_2}$ | $\sqrt{r_2}$ |
 
 > 📄 **파일: `MonteCarloDemo.cu`** — 원서 Listing `rand-unit-sphere-plot`, `random-cosine-direction`에 대응
 
@@ -80,11 +138,13 @@ __device__ inline Vector3 RandomCosineDirectionDemo(DemoRng* rng)
 
 ## 적분으로 검증하기
 
-눈으로 보는 것보다 확실한 방법은 **답을 아는 적분**을 풀어 보는 것이다. 반구에서 cos³을 적분하면
+눈으로 보는 것(plot.ly에서 돌려 보며 "고르게 퍼졌네" 하는 것)보다 확실한 방법은 **답을 아는 적분**을 풀어 보는 것이다. 원서는 반구에서 $\cos^3$ 을 고른다 — 특별한 의미가 있어서가 아니라 그냥 해석해가 있는 함수라서다. 먼저 손으로 풀어 두자.
 
-$$ \int_{\text{hemi}} \cos^3\theta\,d\omega = \int_0^{2\pi}\!\!\int_0^{\pi/2}\cos^3\theta\,\sin\theta\,d\theta\,d\phi = 2\pi\cdot\frac{1}{4} = \frac{\pi}{2} $$
+$$ \int_{\text{hemi}} \cos^3\theta\,dA = \int_0^{2\pi}\!\!\int_0^{\pi/2}\cos^3\theta\,\sin\theta\,d\theta\,d\phi = 2\pi\int_0^{\pi/2}\cos^3\theta\,\sin\theta\,d\theta = 2\pi\cdot\frac{1}{4} = \frac{\pi}{2} $$
 
-이고, 구 전체에서 cos²을 적분하면 4장에서 본 대로 $4\pi/3$이다. 같은 적분을 **다른 PDF**로 풀어 보면 중요도 샘플링의 효과가 숫자로 보인다(`--demo dirs`, 각 1,677만 샘플).
+그리고 구 전체에서 $\cos^2$ 을 적분하면 4장에서 본 대로 $4\pi/3$ 이다. 이제 이 값들을 **서로 다른 PDF로** 추정해 본다. 반구 균일이면 $p(\omega) = 1/2\pi$ 이므로 $f/p = \cos^3\theta \big/ \tfrac{1}{2\pi}$ 를 평균내고, 코사인 분포면 $p(\omega) = \cos\theta/\pi$ 로 나눈다.
+
+`--demo dirs`로 세 경우를 각각 1,677만 샘플씩 돌렸다.
 
 ```text
 [dirs] inversion-method directions, N = 16777216 per case
