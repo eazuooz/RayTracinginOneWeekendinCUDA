@@ -1,7 +1,7 @@
 # Light Scattering (빛의 산란) — CUDA 적용판
 
 > *Ray Tracing: The Rest of Your Life* 5장을 우리 **CUDA + 레이트레이싱 프로젝트** 기준으로 정리한 문서.
-> 원서의 흐름(알베도 → 산란 → 산란 PDF)을 따라가되 설명은 요약·재구성했다. 원서 5장은 코드가 없는 "수식 준비" 장이라, 우리는 그 수식을 GPU 데모로 **숫자로 검증**했다.
+> 원서의 논지를 빠짐없이 따라가되 설명은 우리 말로 다시 썼다. 원서 5장은 코드가 없는 "수식 준비" 장이라, 우리는 그 수식을 GPU 데모로 **숫자로 검증**했다.
 > 원서: <https://raytracing.github.io/books/RayTracingTheRestOfYourLife.html> (v4.0.2) · 코드 커밋 `405dacf`
 
 ---
@@ -10,6 +10,14 @@
 > 1. 원서 5장은 렌더러 코드를 바꾸지 않는다. 우리는 `--demo lambert`로 (1) Lambertian 산란 PDF의 정규화, (2) 산란 방향 생성기의 실제 분포를 확인했다.
 > 2. **핵심 발견**: 지금까지 우리 렌더러의 `Lambertian`(법선 + *단위 공 안*의 점)은 cosθ/π가 아니라 **cos³θ 분포**였다. 진짜 Lambertian은 법선 + *단위 구 위*의 점이다. 6장에서 바로잡는다.
 > 3. GPU 기법: 히스토그램을 **공유 메모리에 먼저 모았다가(사유화)** 블록당 한 번씩 전역에 더한다.
+
+---
+
+## 이 장에서 하는 일
+
+이 장에서는 **코드를 한 줄도 쓰지 않는다.** 다음 장의 큰 조명 변경을 위한 준비만 한다.
+
+1·2권의 레이트레이서는 레이가 표면이나 볼륨과 만나면 **산란**시켰다. 레이 산란은 장면 안에서 빛이 퍼지는 과정을 흉내 내는 가장 흔한 모델이고, 그 본성상 **확률적으로 모델링하기에 자연스럽다.** 다만 확률적으로 다루려면 따져야 할 것이 꽤 많다. 하나씩 보자.
 
 ---
 
@@ -44,9 +52,21 @@ $$ \operatorname{Color}_o(\mathbf{x}, \omega_o, \lambda) = \int_{\omega_i} A(\ma
 
 $$ \operatorname{Color}_o \approx \sum \frac{A(\ldots)\cdot\operatorname{pScatter}(\ldots)\cdot\operatorname{Color}_i(\ldots)}{p(\mathbf{x}, \omega_i, \omega_o, \lambda)} $$
 
-**Lambertian** 표면의 산란 PDF는 $\cos\theta_o$에 비례한다($\theta_o$는 법선과 나가는 방향 사이 각, 수평선 아래로는 산란하지 않음). 비례 상수 C는 반구 전체에서 적분이 1이 되도록 정한다. 구면 좌표에서 $dA = \sin\theta\,d\theta\,d\phi$ 이므로
+**Lambertian** 표면의 산란 PDF는 $\cos\theta_o$ 에 비례한다. 여기서 $\theta_o$ 는 법선과 나가는 방향 사이의 각이고 $[0, \pi]$ 범위다 — 0이면 법선과 같은 방향, $\pi$면 법선의 정반대 방향이다.
 
-$$ 1 = C\int_0^{2\pi}\!\!\int_0^{\pi/2}\cos\theta\,\sin\theta\,d\theta\,d\phi = C\cdot 2\pi\cdot\frac{1}{2} = C\pi \;\Rightarrow\; C = \frac{1}{\pi}, \qquad \operatorname{pScatter}(\omega_o) = \frac{\cos\theta_o}{\pi} $$
+$$ \operatorname{pScatter}(\mathbf{x}, \omega_i, \omega_o, \lambda) = C\cdot\cos\theta_o $$
+
+이제 상수 $C$ 를 정한다. 2차원 PDF는 모두 전체 면에서 적분하면 1이어야 한다($\operatorname{pScatter}$도 PDF다). 그리고 **수평선 아래로는 산란하지 않도록** $\operatorname{pScatter}(\tfrac{\pi}{2} < \theta_o \le \pi) = 0$ 으로 둔다. 그러므로 적분은 $\theta \in [0, \tfrac{\pi}{2}]$ 만 하면 된다.
+
+$$ 1 = \int_{\phi=0}^{2\pi}\!\!\int_{\theta=0}^{\pi/2} C\cdot\cos\theta\;dA $$
+
+구면 좌표에서 넓이 조각은 $dA = \sin\theta\,d\theta\,d\phi$ 이므로
+
+$$ 1 = C\int_0^{2\pi}\!\!\int_0^{\pi/2}\cos\theta\,\sin\theta\,d\theta\,d\phi = C\cdot 2\pi\cdot\frac{1}{2} = C\pi \;\Longrightarrow\; C = \frac{1}{\pi} $$
+
+바꿔 말하면 **반구에서 $\cos\theta_o$ 를 적분하면 $\pi$** 이고, 그래서 $1/\pi$ 로 정규화해야 한다는 뜻이다. $\operatorname{pScatter}$는 결국 나가는 방향에만 의존하므로 표기를 $\operatorname{pScatter}(\omega_o)$ 로 줄이면
+
+$$ \operatorname{pScatter}(\omega_o) = \frac{\cos\theta_o}{\pi} $$
 
 이제 방향을 **산란 PDF와 똑같은 분포로** 뽑는다고 하자($p = \operatorname{pScatter}$). 그러면 분자와 분모가 약분되어
 
