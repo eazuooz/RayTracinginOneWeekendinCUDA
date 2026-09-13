@@ -378,15 +378,15 @@ $$ p(x) = \frac{d}{dx}P(x) $$
 $$
 p(r) =
 \begin{cases}
-0 & r < 0 \[2pt]
-\dfrac{r}{2} & 0 \le r \le 2 \[4pt]
+0 & r < 0 \\
+\dfrac{r}{2} & 0 \le r \le 2 \\
 0 & r > 2
 \end{cases}
 \qquad
 P(r) =
 \begin{cases}
-0 & r < 0 \[2pt]
-\dfrac{r^2}{4} & 0 \le r \le 2 \[4pt]
+0 & r < 0 \\
+\dfrac{r^2}{4} & 0 \le r \le 2 \\
 1 & r > 2
 \end{cases}
 $$
