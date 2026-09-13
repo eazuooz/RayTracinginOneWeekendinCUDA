@@ -1,7 +1,7 @@
 # A Simple Monte Carlo Program (간단한 몬테카를로 프로그램) — CUDA 적용판
 
 > *Ray Tracing: The Rest of Your Life* 2장을 우리 **CUDA + 레이트레이싱 프로젝트** 기준으로 정리한 문서.
-> 원서의 흐름(몬테카를로 개념 → π 추정 → 수렴 → 층화 → 코넬 박스)을 따라가되, 설명은 요약·재구성했고 코드는 전부 우리 GPU 코드다. 실제로 빌드·실행해서 수치와 이미지를 확인했다.
+> 원서의 논지를 빠짐없이 따라가되 설명은 우리 말로 다시 썼고, 코드는 전부 우리 GPU 코드다. 실제로 빌드·실행해서 수치와 이미지를 확인했다.
 > 원서: Peter Shirley, Trevor David Black, Steve Hollasch — <https://raytracing.github.io/books/RayTracingTheRestOfYourLife.html> (v4.0.2)
 
 ---
